@@ -15,13 +15,24 @@ if not os.path.exists(MODEL_PATH):
 clf = joblib.load(MODEL_PATH)
 
 # ======================
-# 2️⃣ Initialize Picamera2
+# 2️⃣ Class label mapping
+# Adjust these numbers based on your classifier
+# ======================
+label_map = {
+    0: "Good Bottles",
+    1: "Defective Bottles- Missing Cap",
+    2: "Defective Bottles- No Label",
+    3: "Defective Bottles- Torn Label"
+}
+
+# ======================
+# 3️⃣ Initialize Picamera2
 # ======================
 picam2 = Picamera2()
 picam2.start()
 
 # ======================
-# 3️⃣ Real-time camera loop
+# 4️⃣ Real-time camera loop
 # ======================
 print("Starting live bottle classification. Press 'q' to quit.")
 
@@ -35,16 +46,19 @@ while True:
     features = gray_resized.flatten().reshape(1, -1)
 
     # Predict class
-    prediction = clf.predict(features)[0]
+    prediction = clf.predict(features)[0]  # numeric label
     probs = clf.predict_proba(features)[0]
     confidence = max(probs) * 100
 
+    # Map numeric label to string
+    pred_class = label_map[prediction]
+
     # Color-coded label
-    if "Good" in prediction:
+    if "Good" in pred_class:
         text = f"GOOD BOTTLE ({confidence:.1f}%)"
         color = (0, 255, 0)  # Green
     else:
-        text = f"{prediction.upper()} ({confidence:.1f}%)"
+        text = f"{pred_class.upper()} ({confidence:.1f}%)"
         color = (0, 0, 255)  # Red
 
     # Display label on frame
@@ -59,7 +73,7 @@ while True:
         break
 
 # ======================
-# 4️⃣ Cleanup
+# 5️⃣ Cleanup
 # ======================
 cv2.destroyAllWindows()
 picam2.close()
