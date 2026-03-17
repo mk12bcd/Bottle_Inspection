@@ -1,11 +1,8 @@
 # main.py
-# main.py
-from picamera.array import PiRGBArray
-from picamera import PiCamera
+from picamera2 import Picamera2
 import cv2
 import joblib
 import numpy as np
-import time
 import os
 
 # ======================
@@ -18,24 +15,22 @@ if not os.path.exists(MODEL_PATH):
 clf = joblib.load(MODEL_PATH)
 
 # ======================
-# 2️⃣ Initialize PiCamera
+# 2️⃣ Initialize Picamera2
 # ======================
-camera = PiCamera()
-camera.resolution = (640, 480)
-camera.framerate = 30
-raw_capture = PiRGBArray(camera, size=(640, 480))
-time.sleep(0.1)  # allow camera to warm up
+picam2 = Picamera2()
+picam2.start()
 
 # ======================
-# 3️⃣ Real-time capture loop
+# 3️⃣ Real-time camera loop
 # ======================
 print("Starting live bottle classification. Press 'q' to quit.")
 
-for frame in camera.capture_continuous(raw_capture, format="bgr", use_video_port=True):
-    image = frame.array
+while True:
+    # Capture frame
+    frame = picam2.capture_array()  # returns a numpy array (BGR)
 
     # Convert to grayscale & resize for classifier
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     gray_resized = cv2.resize(gray, (200, 200))
     features = gray_resized.flatten().reshape(1, -1)
 
@@ -53,21 +48,19 @@ for frame in camera.capture_continuous(raw_capture, format="bgr", use_video_port
         color = (0, 0, 255)  # Red
 
     # Display label on frame
-    cv2.putText(image, text, (30, 50),
+    cv2.putText(frame, text, (30, 50),
                 cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
 
     # Show live preview
-    cv2.imshow("Bottle Classifier", image)
+    cv2.imshow("Bottle Classifier", frame)
 
-    key = cv2.waitKey(1) & 0xFF
-    raw_capture.truncate(0)  # clear stream for next frame
-
-    if key == ord('q'):
+    # Exit loop when 'q' is pressed
+    if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
 # ======================
 # 4️⃣ Cleanup
 # ======================
 cv2.destroyAllWindows()
-camera.close()
+picam2.close()
 print("Camera closed. Exiting.")
