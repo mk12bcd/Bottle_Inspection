@@ -1,50 +1,69 @@
-# train_classifier.py
+import os
+import cv2
 import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score
+from sklearn.svm import SVC  # or whatever classifier you’re using
 import joblib
-git commit -m "Add scripts and images"
-git push origin main
-# ========================
-# Step 1: Load preprocessed data
-# ========================
-X = np.load("X.npy")
-y = np.load("y.npy")
+
+# 1️⃣ Paths and categories
+base_path = "../Images"  # adjust if needed
+categories = [
+    "Good Bottles",
+    "Defective Bottles - Missing Cap",
+    "Defective Bottles - No Label",
+]
+
+# 2️⃣ Load images
+X = []
+y = []
+
+for idx, cat in enumerate(categories):
+    folder = os.path.join(base_path, cat, "Training Sample").replace("\\", "/")
+    if not os.path.exists(folder):
+        print(f"Warning: Folder not found -> {folder}")
+        continue
+
+    files = os.listdir(folder)
+    print(f"{cat}: {len(files)} images")  # check count
+
+    for file in files:
+        img_path = os.path.join(folder, file)
+        img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)  # grayscale
+        if img is None:
+            print(f"Failed to load {img_path}")
+            continue
+        img = cv2.resize(img, (200, 200))
+        X.append(img)
+        y.append(idx)
+
+# 3️⃣ Convert to numpy arrays
+X = np.array(X)
+y = np.array(y)
 
 print("Data loaded:")
-print("X shape:", X.shape)  # (num_images, 200, 200)
-print("y shape:", y.shape)  # (num_images,)
+print("X shape:", X.shape)
+print("y shape:", y.shape)
 
-# ========================
-# Step 2: Flatten images for simple classifier
-# ========================
-X = X.reshape(-1, 200*200)  # flatten 2D images to 1D vectors
+# 4️⃣ Flatten images if using SVM
+X_flat = X.reshape(len(X), -1)
 
-# ========================
-# Step 3: Split into train and test sets
-# ========================
+# 5️⃣ Split into training and testing
 X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42
+    X_flat, y, test_size=0.2, random_state=42
 )
 
-print(f"Training samples: {len(X_train)}, Testing samples: {len(X_test)}")
+print("Training samples:", len(X_train), "Testing samples:", len(X_test))
 
-# ========================
-# Step 4: Train Random Forest classifier
-# ========================
-clf = RandomForestClassifier(n_estimators=100, random_state=42)
+# 6️⃣ Train classifier
+clf = SVC(probability=True)
 clf.fit(X_train, y_train)
 
-# ========================
-# Step 5: Evaluate on test set
-# ========================
-y_pred = clf.predict(X_test)
-accuracy = accuracy_score(y_test, y_pred)
-print(f"Test Accuracy: {accuracy*100:.2f}%")
+# 7️⃣ Test accuracy
+acc = clf.score(X_test, y_test)
+print("Test Accuracy: {:.2f}%".format(acc * 100))
 
-# ========================
-# Step 6: Save trained model
-# ========================
+# 8️⃣ Save model
 joblib.dump(clf, "bottle_classifier.pkl")
 print("Classifier saved as bottle_classifier.pkl")
+print("Checking folder:", folder)
+print("Exists?", os.path.exists(folder))
