@@ -3,6 +3,8 @@ import cv2
 import joblib
 import numpy as np
 from ultralytics import YOLO
+import os
+os.environ["YOLO_DEVICE"] = "cpu"
 
 # ======================
 # Load classifier
