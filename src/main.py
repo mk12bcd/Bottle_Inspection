@@ -46,18 +46,34 @@ def detect_bottle(frame):
 
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    if len(contours) == 0:
-        return None
+    h, w = frame.shape[:2]
+    center_x = w // 2
 
-    largest = max(contours, key=cv2.contourArea)
+    best_box = None
+    min_distance = float("inf")
 
-    x, y, w, h = cv2.boundingRect(largest)
+    for cnt in contours:
+        x, y, cw, ch = cv2.boundingRect(cnt)
 
-    if w * h < 2000:  # filter noise
-        return None
+        area = cw * ch
 
-    return (x, y, x+w, y+h)
+        # 🔹 FILTER 1: Ignore small noise
+        if area < 5000:
+            continue
 
+        # 🔹 FILTER 2: Bottle must be tall
+        if ch < cw:
+            continue
+
+        # 🔹 FILTER 3: Must be near center
+        obj_center_x = x + cw // 2
+        distance = abs(obj_center_x - center_x)
+
+        if distance < min_distance:
+            min_distance = distance
+            best_box = (x, y, x+cw, y+ch)
+
+    return best_box
 print("Running... Press 'q' to quit.")
 
 while True:
@@ -90,6 +106,8 @@ while True:
             prediction = clf.predict(features)[0]
             probs = clf.predict_proba(features)[0]
             confidence = max(probs) * 100
+            if confidence < 60:
+                bottle_detected = False
 
             predictions_buffer.append(prediction)
             confidence_buffer.append(confidence)
