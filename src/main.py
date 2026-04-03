@@ -10,8 +10,8 @@ import time
 # ======================
 net = ncnn.Net()
 net.opt.use_vulkan_compute = False  # Use CPU only
-net.load_param("yolov8n_ncnn_model/yolov8n_ncnn_model.param")
-net.load_model("yolov8n_ncnn_model/yolov8n_ncnn_model.bin")
+net.load_param("yolov8n_ncnn_model/model.ncnn.param")
+net.load_model("yolov8n_ncnn_model/model.ncnn.bin")
 
 # ======================
 # Load classifier
