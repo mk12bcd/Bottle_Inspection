@@ -23,7 +23,7 @@ clf = joblib.load("bottle_classifier.pkl")
 # ======================
 picam2 = Picamera2()
 config = picam2.create_preview_configuration(
-    main={"size": (640, 480), "format": "RGB888"},  # Smaller resolution, RGB format
+    main={"size": (320, 240), "format": "RGB888"},  # Smaller resolution, RGB format
     buffer_count=2  # Reduce buffer count for less latency
 )
 picam2.configure(config)
@@ -113,7 +113,7 @@ def update_fps():
 # Main loop with performance optimizations
 # ======================
 frame_count = 0
-process_every_n_frames = 1  # Process every frame (reduce lag)
+process_every_n_frames = 2  # Process every frame (reduce lag)
 last_frame_time = time.time()
 
 print("Starting bottle inspection system...")
