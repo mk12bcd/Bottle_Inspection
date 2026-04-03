@@ -52,15 +52,20 @@ def detect(frame):
     # Preprocess
     img = cv2.resize(frame, (320, 320))
     
+    # Convert to RGB (NCNN expects RGB)
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    
     # Create NCNN mat
-    mat_in = ncnn.Mat.from_pixels(img, ncnn.Mat.PixelType.PIXEL_RGB, 320, 320)
+    mat_in = ncnn.Mat.from_pixels(img_rgb, ncnn.Mat.PixelType.PIXEL_RGB, 320, 320)
+    
+    # Normalize
     mat_in.substract_mean_normalize([0, 0, 0], [1/255, 1/255, 1/255])
     
     # Run inference
     ex = net.create_extractor()
-    ex.input("images", mat_in)
+    ex.input("in0", mat_in)  # Changed from "images" to "in0"
     
-    ret, mat_out = ex.extract("output")
+    ret, mat_out = ex.extract("out0")  # Changed from "output" to "out0"
     
     # Parse output
     boxes = []
@@ -102,7 +107,6 @@ print("=" * 50)
 # ======================
 # Main loop
 # ======================
-frame_count = 0
 current_bottle_id = None
 detection_start_time = None
 predictions_buffer = []
@@ -113,7 +117,7 @@ while True:
     frame = picam2.capture_array()
     h, w, _ = frame.shape
     
-    # Run detection every frame
+    # Run detection
     boxes = detect(frame)
     
     # Find bottle closest to center
