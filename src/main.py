@@ -7,7 +7,7 @@ import time
 from collections import deque
 
 # ======================
-# Load ONNX model
+# Load ONNX model (320x320 version)
 # ======================
 session = ort.InferenceSession("yolov8n.onnx", providers=['CPUExecutionProvider'])  # Force CPU
 input_name = session.get_inputs()[0].name
@@ -41,21 +41,21 @@ last_detection_time = {}
 DETECTION_COOLDOWN = 1.0  # seconds between counting same bottle
 
 # ======================
-# Preprocess - FIXED for 640x640
+# Preprocess - FIXED for 320x320
 # ======================
 def preprocess(frame):
     # Resize maintaining aspect ratio with padding
     h, w = frame.shape[:2]
-    scale = 640 / max(h, w)
+    scale = 320 / max(h, w)  # CHANGED from 640 to 320
     new_w = int(w * scale)
     new_h = int(h * scale)
     
     resized = cv2.resize(frame, (new_w, new_h))
     
-    # Create square canvas (640x640)
-    canvas = np.full((640, 640, 3), 114, dtype=np.uint8)  # Gray padding
-    x_offset = (640 - new_w) // 2
-    y_offset = (640 - new_h) // 2
+    # Create square canvas (320x320)
+    canvas = np.full((320, 320, 3), 114, dtype=np.uint8)  # CHANGED from 640 to 320
+    x_offset = (320 - new_w) // 2  # CHANGED from 640 to 320
+    y_offset = (320 - new_h) // 2  # CHANGED from 640 to 320
     canvas[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = resized
     
     # Normalize and convert
@@ -78,7 +78,7 @@ def detect(frame):
     for pred in preds:
         conf = pred[4]
         if conf > 0.5:  # Confidence threshold
-            # Get box coordinates in 640x640 space
+            # Get box coordinates in 320x320 space
             x1, y1, x2, y2 = pred[:4]
             
             # Remove padding offset
@@ -113,13 +113,14 @@ def update_fps():
 # Main loop with performance optimizations
 # ======================
 frame_count = 0
-process_every_n_frames = 2  # Process every frame (reduce lag)
+process_every_n_frames = 1  # Process every frame (320 model is faster now)
 last_frame_time = time.time()
 
 print("Starting bottle inspection system...")
 print("Press 'q' to quit")
 print("Press 'r' to reset counters")
-print("Press 'd' to toggle detection display")
+print("Press '+' to process more frames (faster)")
+print("Press '-' to process fewer frames (slower but smoother)")
 
 show_detections = True
 
@@ -143,7 +144,7 @@ while True:
         # Bottle counting and classification
         if len(boxes) == 0:
             cv2.putText(display_frame, "NO BOTTLE DETECTED", (30, 50),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
         else:
             # Find center-most bottle
             h, w = display_frame.shape[:2]
@@ -189,28 +190,28 @@ while True:
                     
                     # Draw classification result
                     cv2.putText(display_frame, label, (x1, y1 - 10),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
             
             # Draw bounding box
             cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(display_frame, f"Conf: {conf:.2f}", (x1, y2 + 20),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
         
         # Display statistics
         fps = update_fps()
         cv2.putText(display_frame, f"FPS: {fps:.1f}", (10, 30),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
         cv2.putText(display_frame, f"Total: {total_count}", (10, 60),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         cv2.putText(display_frame, f"Good: {good_count}", (10, 90),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
         cv2.putText(display_frame, f"Defective: {defective_count}", (10, 120),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
         
         # Show processing time
         process_time = (time.time() - current_time) * 1000
         cv2.putText(display_frame, f"Process: {process_time:.0f}ms", (10, 150),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
     
     # Show frame
     cv2.imshow("Bottle Inspection System", display_frame)
@@ -225,8 +226,6 @@ while True:
         total_count = 0
         last_detection_time.clear()
         print("Counters reset")
-    elif key == ord('d'):
-        show_detections = not show_detections
     elif key == ord('+') and process_every_n_frames > 1:
         process_every_n_frames -= 1
         print(f"Processing every {process_every_n_frames} frames")
