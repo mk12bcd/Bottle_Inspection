@@ -25,7 +25,7 @@ picam2.start()
 # Preprocess
 # ======================
 def preprocess(frame):
-    img = cv2.resize(frame, (320, 320))   # smaller = faster
+    img = cv2.resize(frame, (640, 640))   # smaller = faster
     img = img.astype(np.float32) / 255.0
     img = np.transpose(img, (2, 0, 1))    # HWC → CHW
     img = np.expand_dims(img, axis=0)     # add batch
@@ -48,10 +48,10 @@ def detect(frame):
             x1, y1, x2, y2 = pred[:4]
 
             # scale to original frame
-            x1 = int(x1 * frame.shape[1] / 320)
-            y1 = int(y1 * frame.shape[0] / 320)
-            x2 = int(x2 * frame.shape[1] / 320)
-            y2 = int(y2 * frame.shape[0] / 320)
+            x1 = int(x1 * frame.shape[1] / 640)
+            y1 = int(y1 * frame.shape[0] / 640)
+            x2 = int(x2 * frame.shape[1] / 640)
+            y2 = int(y2 * frame.shape[0] / 640)
 
             boxes.append((x1, y1, x2, y2, conf))
 
