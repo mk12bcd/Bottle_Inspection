@@ -1,171 +1,70 @@
-from picamera2 import Picamera2
 import cv2
-import joblib
 import numpy as np
+import onnxruntime as ort
+from picamera2 import Picamera2
 
-# ======================
-# Load classifier
-# ======================
-clf = joblib.load("bottle_classifier.pkl")
+# Load ONNX model
+session = ort.InferenceSession("yolov8n.onnx")
 
-label_map = {
-    0: "Good Bottles",
-    1: "Defective Bottles - Missing Cap",
-    2: "Defective Bottles - No Label"
-}
-
-# ======================
 # Camera
-# ======================
 picam2 = Picamera2()
 picam2.start()
 
-# ======================
-# Counters
-# ======================
-good_count = 0
-defective_count = 0
-last_counted = False
-cooldown = 0
+input_name = session.get_inputs()[0].name
 
-# ======================
-# Stability
-# ======================
-predictions_buffer = []
-confidence_buffer = []
-stable_count = 0
+def preprocess(frame):
+    img = cv2.resize(frame, (640, 640))
+    img = img / 255.0
+    img = img.astype(np.float32)
+    img = np.transpose(img, (2, 0, 1))
+    img = np.expand_dims(img, axis=0)
+    return img
 
-# ======================
-# Bottle Detection Function
-# ======================
-def detect_bottle(frame):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (5,5), 0)
+def detect(frame):
+    img = preprocess(frame)
 
-    _, thresh = cv2.threshold(blur, 60, 255, cv2.THRESH_BINARY_INV)
+    outputs = session.run(None, {input_name: img})
 
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    predictions = outputs[0][0]
 
-    h, w = frame.shape[:2]
-    center_x = w // 2
+    boxes = []
+    for pred in predictions:
+        conf = pred[4]
 
-    best_box = None
-    min_distance = float("inf")
+        if conf > 0.5:
+            x, y, w, h = pred[:4]
 
-    for cnt in contours:
-        x, y, cw, ch = cv2.boundingRect(cnt)
+            x1 = int((x - w/2) * frame.shape[1] / 640)
+            y1 = int((y - h/2) * frame.shape[0] / 640)
+            x2 = int((x + w/2) * frame.shape[1] / 640)
+            y2 = int((y + h/2) * frame.shape[0] / 640)
 
-        area = cw * ch
+            boxes.append((x1, y1, x2, y2, conf))
 
-        # 🔹 FILTER 1: Ignore small noise
-        if area < 5000:
-            continue
-
-        # 🔹 FILTER 2: Bottle must be tall
-        if ch < cw:
-            continue
-
-        # 🔹 FILTER 3: Must be near center
-        obj_center_x = x + cw // 2
-        distance = abs(obj_center_x - center_x)
-
-        if distance < min_distance:
-            min_distance = distance
-            best_box = (x, y, x+cw, y+ch)
-
-    return best_box
-print("Running... Press 'q' to quit.")
+    return boxes
 
 while True:
     frame = picam2.capture_array()
-    h, w, _ = frame.shape
 
-    # Smooth frame
-    frame = cv2.GaussianBlur(frame, (3,3), 0)
+    boxes = detect(frame)
 
-    # Title
-    cv2.putText(frame, "Bottle Inspection System", (10,30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
-
-    # Detect bottle
-    box = detect_bottle(frame)
-
-    bottle_detected = False
-
-    if box is not None:
-        x1, y1, x2, y2 = box
-        bottle_detected = True
-
-        bottle = frame[y1:y2, x1:x2]
-
-        if bottle.size != 0:
-            gray = cv2.cvtColor(bottle, cv2.COLOR_BGR2GRAY)
-            gray = cv2.resize(gray, (200, 200))
-            features = gray.flatten().reshape(1, -1)
-
-            prediction = clf.predict(features)[0]
-            probs = clf.predict_proba(features)[0]
-            confidence = max(probs) * 100
-            if confidence < 60:
-                bottle_detected = False
-
-            predictions_buffer.append(prediction)
-            confidence_buffer.append(confidence)
-
-            if len(predictions_buffer) > 3:
-                predictions_buffer.pop(0)
-                confidence_buffer.pop(0)
-
-            stable_count += 1
-            cooldown -= 1
-
-            # Detecting state
-            if stable_count <= 1:
-                cv2.putText(frame, "DETECTING...", (30,70),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,255), 2)
-
-            if stable_count > 1:
-                final_pred = max(set(predictions_buffer), key=predictions_buffer.count)
-                final_conf = sum(confidence_buffer) / len(confidence_buffer)
-
-                if final_pred == 0:
-                    label = f"GOOD BOTTLE ({final_conf:.1f}%)"
-                    color = (0,255,0)
-                else:
-                    defect = label_map[final_pred].split("-")[-1].strip()
-                    label = f"DEFECTIVE - {defect} ({final_conf:.1f}%)"
-                    color = (0,0,255)
-
-                if not last_counted and cooldown <= 0:
-                    if final_pred == 0:
-                        good_count += 1
-                    else:
-                        defective_count += 1
-
-                    last_counted = True
-                    cooldown = 10
-
-                cv2.rectangle(frame, (x1,y1), (x2,y2), color, 2)
-                cv2.putText(frame, label, (x1, y1-10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-
-    else:
-        stable_count = 0
-        predictions_buffer.clear()
-        confidence_buffer.clear()
-        last_counted = False
-
+    if len(boxes) == 0:
         cv2.putText(frame, "NO BOTTLE", (30,50),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255,0,0), 2)
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
+    else:
+        # choose center-most box
+        h, w = frame.shape[:2]
+        center_x = w // 2
 
-    # Counters
-    cv2.putText(frame, f"GOOD: {good_count}", (10, h - 40),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
+        best_box = min(boxes, key=lambda b: abs(((b[0]+b[2])//2) - center_x))
 
-    cv2.putText(frame, f"DEFECTIVE: {defective_count}", (10, h - 10),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
+        x1, y1, x2, y2, conf = best_box
 
-    cv2.imshow("Bottle Inspection System", frame)
+        cv2.rectangle(frame, (x1,y1), (x2,y2), (0,255,0), 2)
+        cv2.putText(frame, f"BOTTLE {conf:.2f}", (x1,y1-10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,0), 2)
+
+    cv2.imshow("ONNX Detection", frame)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
