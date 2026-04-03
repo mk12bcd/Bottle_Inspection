@@ -17,7 +17,6 @@ def preprocess(frame):
     img = img / 255.0
     img = img.astype(np.float32)
     img = np.transpose(img, (2, 0, 1))
-    img = np.expand_dims(img, axis=0)
     return img
 
 def detect(frame):
