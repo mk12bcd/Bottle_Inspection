@@ -136,13 +136,15 @@ while True:
     # Find bottle closest to center
     # ======================
     center_x = w // 2
+    center_y = h // 2  # FIXED: Defined center_y here
     best_box = None
     min_distance = float("inf")
     
     for box in boxes:
         x1, y1, x2, y2, conf = box
         box_center_x = (x1 + x2) // 2
-        distance = abs(box_center_x - center_x)
+        box_center_y = (y1 + y2) // 2
+        distance = ((box_center_x - center_x)**2 + (box_center_y - center_y)**2)**0.5
         
         if distance < min_distance:
             min_distance = distance
