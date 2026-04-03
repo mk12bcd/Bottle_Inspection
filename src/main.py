@@ -19,7 +19,7 @@ picam2.start()
 # Preprocess function
 # ======================
 def preprocess(frame):
-    img = cv2.resize(frame, (640, 640))
+    img = cv2.resize(frame, (320, 320))
     img = img.astype(np.float32) / 255.0
 
     # HWC → CHW
