@@ -1,17 +1,13 @@
 import cv2
 import numpy as np
-import ncnn
 from picamera2 import Picamera2
 import joblib
 import time
 
 # ======================
-# Load NCNN model
+# Load OpenCV DNN model
 # ======================
-net = ncnn.Net()
-net.opt.use_vulkan_compute = False  # Use CPU only
-net.load_param("yolov8n_ncnn_model/model.ncnn.param")
-net.load_model("yolov8n_ncnn_model/model.ncnn.bin")
+net = cv2.dnn.readNetFromONNX("yolov8n.onnx")
 
 # ======================
 # Load classifier
@@ -44,49 +40,40 @@ defective_count = 0
 total_count = 0
 
 # ======================
-# Detection with NCNN
+# Detection with OpenCV DNN
 # ======================
 def detect(frame):
     h, w = frame.shape[:2]
     
-    # Preprocess
-    img = cv2.resize(frame, (320, 320))
-    
-    # Convert to RGB (NCNN expects RGB)
-    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    
-    # Create NCNN mat
-    mat_in = ncnn.Mat.from_pixels(img_rgb, ncnn.Mat.PixelType.PIXEL_RGB, 320, 320)
-    
-    # Normalize
-    mat_in.substract_mean_normalize([0, 0, 0], [1/255, 1/255, 1/255])
+    # Create blob
+    blob = cv2.dnn.blobFromImage(frame, 1/255.0, (320, 320), swapRB=True, crop=False)
     
     # Run inference
-    ex = net.create_extractor()
-    ex.input("in0", mat_in)  # Changed from "images" to "in0"
+    net.setInput(blob)
+    outputs = net.forward()
     
-    ret, mat_out = ex.extract("out0")  # Changed from "output" to "out0"
+    # Output shape: (1, 84, 8400) or (1, 8400, 84)
+    outputs = outputs[0]  # Remove batch dimension
     
-    # Parse output
+    # Transpose if needed
+    if outputs.shape[0] == 84:
+        outputs = outputs.transpose(1, 0)
+    
     boxes = []
-    data = np.array(mat_out)
-    
-    # data shape: [num_detections, 84]
-    for i in range(data.shape[0]):
-        obj_conf = data[i][4]
+    for i in range(outputs.shape[0]):
+        obj_conf = outputs[i][4]
         
         if obj_conf > 0.4:
-            class_scores = data[i][5:]
+            class_scores = outputs[i][5:]
             class_id = np.argmax(class_scores)
             class_conf = class_scores[class_id]
             
             if class_id == 39 and class_conf > 0.4:
-                x1 = int(data[i][0] * w / 320)
-                y1 = int(data[i][1] * h / 320)
-                x2 = int(data[i][2] * w / 320)
-                y2 = int(data[i][3] * h / 320)
+                x1 = int(outputs[i][0] * w / 320)
+                y1 = int(outputs[i][1] * h / 320)
+                x2 = int(outputs[i][2] * w / 320)
+                y2 = int(outputs[i][3] * h / 320)
                 
-                # Ensure coordinates are valid
                 x1 = max(0, min(x1, w))
                 y1 = max(0, min(y1, h))
                 x2 = max(0, min(x2, w))
@@ -98,7 +85,7 @@ def detect(frame):
     return boxes
 
 print("=" * 50)
-print("MKY Automation - Bottle Inspection System (NCNN)")
+print("MKY Automation - Bottle Inspection System (OpenCV DNN)")
 print("=" * 50)
 print("Press 'q' to quit")
 print("Press 'r' to reset counters")
