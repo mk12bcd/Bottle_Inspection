@@ -36,19 +36,44 @@ ex = net.create_extractor()
 ex.input("in0", mat_in)
 
 ret, mat_out = ex.extract("out0")
-data = np.array(mat_out)
 
-print(f"\nOutput shape: {data.shape}")
-print(f"Number of detections: {data.shape[0]}")
+# The output needs to be reshaped properly
+# Expected shape: (1, 84, 2100) or (1, 2100, 84)
+data = np.array(mat_out)
+print(f"Raw output shape: {data.shape}")
+
+# Reshape to expected YOLO output format
+# YOLO output is typically [batch, 84, num_detections] or [batch, num_detections, 84]
+if len(data.shape) == 2:
+    # Try to reshape to (84, 2100) -> (1, 84, 2100)
+    if data.shape[0] == 84 and data.shape[1] == 2100:
+        data = data.reshape(1, 84, 2100)
+        data = data.transpose(0, 2, 1)  # Now (1, 2100, 84)
+        print(f"Reshaped to: {data.shape}")
+
+# Now data should be (1, num_detections, 84)
+detections = data[0]  # (num_detections, 84)
+
+print(f"\nNumber of detections: {detections.shape[0]}")
 print("=" * 60)
 
-# Show all detections
 bottle_count = 0
-for i in range(data.shape[0]):
-    obj_conf = data[i][4]
+for i in range(detections.shape[0]):
+    # Get object confidence (should be sigmoid activated)
+    obj_conf = detections[i][4]
+    
+    # If confidence seems raw (large number), apply sigmoid
+    if obj_conf > 1:
+        obj_conf = 1 / (1 + np.exp(-obj_conf))
     
     if obj_conf > 0.3:
-        class_scores = data[i][5:]
+        # Get class scores
+        class_scores = detections[i][5:]
+        
+        # Apply sigmoid to class scores if they're large
+        if np.max(class_scores) > 10:
+            class_scores = 1 / (1 + np.exp(-class_scores))
+        
         class_id = np.argmax(class_scores)
         class_conf = class_scores[class_id]
         
@@ -57,23 +82,27 @@ for i in range(data.shape[0]):
         print(f"  Class ID: {class_id}")
         print(f"  Class Confidence: {class_conf:.3f}")
         
-        if class_id == 39:
+        if class_id == 39 and class_conf > 0.3:
             bottle_count += 1
-            x1 = data[i][0]
-            y1 = data[i][1]
-            x2 = data[i][2]
-            y2 = data[i][3]
+            x1 = detections[i][0]
+            y1 = detections[i][1]
+            x2 = detections[i][2]
+            y2 = detections[i][3]
+            
+            # Scale coordinates (they should already be normalized 0-1)
+            if x1 > 1:  # If raw coordinates, normalize
+                x1 = x1 / 320
+                y1 = y1 / 320
+                x2 = x2 / 320
+                y2 = y2 / 320
+            
+            x1_scaled = int(x1 * w)
+            y1_scaled = int(y1 * h)
+            x2_scaled = int(x2 * w)
+            y2_scaled = int(y2 * h)
             
             print(f"  ✅ BOTTLE DETECTED!")
-            print(f"  Raw box coords: ({x1:.1f}, {y1:.1f}) to ({x2:.1f}, {y2:.1f})")
-            
-            # Scale to frame
-            x1_scaled = int(x1 * w / 320)
-            y1_scaled = int(y1 * h / 320)
-            x2_scaled = int(x2 * w / 320)
-            y2_scaled = int(y2 * h / 320)
-            
-            print(f"  Scaled box: ({x1_scaled},{y1_scaled}) to ({x2_scaled},{y2_scaled})")
+            print(f"  Box: ({x1_scaled},{y1_scaled}) to ({x2_scaled},{y2_scaled})")
             
             # Draw on frame
             cv2.rectangle(frame, (x1_scaled, y1_scaled), (x2_scaled, y2_scaled), (0, 255, 0), 2)
@@ -85,16 +114,8 @@ print(f"Total bottles detected: {bottle_count}")
 
 if bottle_count == 0:
     print("\n⚠️ NO BOTTLES DETECTED")
-    max_conf = np.max(data[:, 4])
-    print(f"Highest object confidence: {max_conf:.3f}")
-    
-    # Show unique classes detected
-    unique_classes = set()
-    for i in range(data.shape[0]):
-        if data[i][4] > 0.2:
-            class_id = np.argmax(data[i][5:])
-            unique_classes.add(class_id)
-    print(f"Classes detected (above 0.2): {sorted(unique_classes)}")
+    print("The model is detecting other classes but not bottle (class 39)")
+    print(f"Classes detected: check above for class IDs")
 
 # Save image
 cv2.imwrite("debug_output.jpg", frame)
