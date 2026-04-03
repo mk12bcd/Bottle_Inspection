@@ -7,55 +7,70 @@ import time
 from collections import deque
 
 # ======================
-# Load ONNX model (320x320 version)
+# Load ONNX model (320x320)
 # ======================
-session = ort.InferenceSession("yolov8n.onnx", providers=['CPUExecutionProvider'])  # Force CPU
+session = ort.InferenceSession("yolov8n.onnx", providers=['CPUExecutionProvider'])
 input_name = session.get_inputs()[0].name
-input_shape = session.get_inputs()[0].shape  # Get expected input shape
 
 # ======================
 # Load classifier
 # ======================
 clf = joblib.load("bottle_classifier.pkl")
 
+label_map = {
+    0: "GOOD",
+    1: "DEFECTIVE - Missing Cap",
+    2: "DEFECTIVE - No Label"
+}
+
 # ======================
-# Camera configuration for less lag
+# Camera setup
 # ======================
 picam2 = Picamera2()
 config = picam2.create_preview_configuration(
-    main={"size": (320, 240), "format": "RGB888"},  # Smaller resolution, RGB format
-    buffer_count=2  # Reduce buffer count for less latency
+    main={"size": (640, 480), "format": "RGB888"},
+    buffer_count=2
 )
 picam2.configure(config)
 picam2.start()
-time.sleep(0.5)  # Allow camera to warm up
+time.sleep(0.5)
 
 # ======================
-# Statistics for counting
+# Counters
 # ======================
 good_count = 0
 defective_count = 0
 total_count = 0
-fps_buffer = deque(maxlen=30)
-last_detection_time = {}
-DETECTION_COOLDOWN = 1.0  # seconds between counting same bottle
 
 # ======================
-# Preprocess - FIXED for 320x320
+# Stability for classification (0.7 second delay)
+# ======================
+predictions_buffer = []
+confidence_buffer = []
+detection_start_time = None
+current_bottle_id = None
+last_classified_time = 0
+CLASSIFICATION_DELAY = 0.7  # 0.7 seconds
+
+# Cooldown to prevent double counting
+last_counted_bottle = None
+COUNTING_COOLDOWN = 1.5  # seconds
+
+# ======================
+# Preprocess for ONNX
 # ======================
 def preprocess(frame):
-    # Resize maintaining aspect ratio with padding
     h, w = frame.shape[:2]
-    scale = 320 / max(h, w)  # CHANGED from 640 to 320
+    scale = 320 / max(h, w)
     new_w = int(w * scale)
     new_h = int(h * scale)
     
     resized = cv2.resize(frame, (new_w, new_h))
     
     # Create square canvas (320x320)
-    canvas = np.full((320, 320, 3), 114, dtype=np.uint8)  # CHANGED from 640 to 320
-    x_offset = (320 - new_w) // 2  # CHANGED from 640 to 320
-    y_offset = (320 - new_h) // 2  # CHANGED from 640 to 320
+    canvas = np.full((320, 320, 3), 114, dtype=np.uint8)
+    x_offset = (320 - new_w) // 2
+    y_offset = (320 - new_h) // 2
     canvas[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = resized
     
     # Normalize and convert
@@ -66,7 +81,7 @@ def preprocess(frame):
     return img, (x_offset, y_offset, scale)
 
 # ======================
-# Detection with proper scaling
+# Detection with ONNX
 # ======================
 def detect(frame):
     img, (x_offset, y_offset, scale) = preprocess(frame)
@@ -77,8 +92,7 @@ def detect(frame):
     
     for pred in preds:
         conf = pred[4]
-        if conf > 0.5:  # Confidence threshold
-            # Get box coordinates in 320x320 space
+        if conf > 0.5:
             x1, y1, x2, y2 = pred[:4]
             
             # Remove padding offset
@@ -93,130 +107,172 @@ def detect(frame):
             x2 = min(frame.shape[1], int(x2))
             y2 = min(frame.shape[0], int(y2))
             
-            # Filter out tiny boxes (likely false positives)
+            # Filter out tiny boxes
             if (x2 - x1) > 20 and (y2 - y1) > 20:
                 boxes.append((x1, y1, x2, y2, conf))
     
     return boxes
 
-# ======================
-# Calculate FPS
-# ======================
-def update_fps():
-    fps_buffer.append(time.time())
-    if len(fps_buffer) > 1:
-        fps = len(fps_buffer) / (fps_buffer[-1] - fps_buffer[0])
-        return fps
-    return 0
-
-# ======================
-# Main loop with performance optimizations
-# ======================
-frame_count = 0
-process_every_n_frames = 1  # Process every frame (320 model is faster now)
-last_frame_time = time.time()
-
-print("Starting bottle inspection system...")
+print("=" * 50)
+print("MKY Automation - Bottle Inspection System")
+print("=" * 50)
 print("Press 'q' to quit")
 print("Press 'r' to reset counters")
-print("Press '+' to process more frames (faster)")
-print("Press '-' to process fewer frames (slower but smoother)")
+print("=" * 50)
 
-show_detections = True
-
+# ======================
+# Main loop
+# ======================
 while True:
-    # Capture frame
     frame = picam2.capture_array()
+    h, w, _ = frame.shape
     
-    # Frame is already RGB from camera config
+    # ======================
+    # Detect bottles
+    # ======================
+    boxes = detect(frame)
+    
+    # ======================
+    # Find bottle closest to center
+    # ======================
+    center_x = w // 2
+    best_box = None
+    min_distance = float("inf")
+    
+    for box in boxes:
+        x1, y1, x2, y2, conf = box
+        box_center_x = (x1 + x2) // 2
+        distance = abs(box_center_x - center_x)
+        
+        if distance < min_distance:
+            min_distance = distance
+            best_box = box
+    
+    # ======================
+    # Create unique bottle ID
+    # ======================
+    bottle_id = None
+    if best_box:
+        x1, y1, x2, y2, conf = best_box
+        bottle_id = f"{x1//30}_{y1//30}"
+    
+    # ======================
+    # Handle detection and classification with 0.7s delay
+    # ======================
     current_time = time.time()
     
-    # Process at reduced frequency for better performance
-    frame_count += 1
-    if frame_count % process_every_n_frames != 0:
-        # Still show frame but skip detection
-        display_frame = frame.copy()
-    else:
-        # Run detection
-        boxes = detect(frame)
-        display_frame = frame.copy()
+    if best_box and bottle_id:
+        x1, y1, x2, y2, conf = best_box
         
-        # Bottle counting and classification
-        if len(boxes) == 0:
-            cv2.putText(display_frame, "NO BOTTLE DETECTED", (30, 50),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-        else:
-            # Find center-most bottle
-            h, w = display_frame.shape[:2]
-            center_x = w // 2
+        # Draw bounding box (always show)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
+        cv2.putText(frame, f"BOTTLE", (x1, y2 + 20),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+        
+        # New bottle detected
+        if current_bottle_id != bottle_id:
+            # Reset for new bottle
+            current_bottle_id = bottle_id
+            detection_start_time = current_time
+            predictions_buffer = []
+            confidence_buffer = []
+        
+        # Show "DETECTING..." during the 0.7 second delay
+        if detection_start_time and (current_time - detection_start_time) < CLASSIFICATION_DELAY:
+            remaining = int(CLASSIFICATION_DELAY - (current_time - detection_start_time))
+            cv2.putText(frame, f"ANALYZING... ({remaining}s)", (x1, y1 - 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+        
+        # After delay, classify
+        elif detection_start_time and (current_time - detection_start_time) >= CLASSIFICATION_DELAY:
+            # Extract bottle ROI
+            bottle_roi = frame[y1:y2, x1:x2]
             
-            best_box = min(boxes, key=lambda b: abs(((b[0] + b[2]) // 2) - center_x))
-            x1, y1, x2, y2, conf = best_box
-            
-            # Create unique ID for this bottle position
-            bottle_id = f"{x1//50}_{y1//50}"
-            
-            # Check if we should count this bottle
-            if bottle_id not in last_detection_time or \
-               (current_time - last_detection_time[bottle_id]) > DETECTION_COOLDOWN:
+            if bottle_roi.size != 0 and (current_time - last_classified_time) > 0.3:
+                # Preprocess for classifier
+                gray = cv2.cvtColor(bottle_roi, cv2.COLOR_RGB2GRAY)
+                gray = cv2.resize(gray, (200, 200))
+                features = gray.flatten().reshape(1, -1)
                 
-                # Extract and classify bottle ROI
-                bottle = frame[y1:y2, x1:x2]
+                # Predict
+                prediction = clf.predict(features)[0]
+                probs = clf.predict_proba(features)[0]
+                confidence = max(probs) * 100
                 
-                if bottle.size != 0:
-                    # Improved feature extraction
-                    gray = cv2.cvtColor(bottle, cv2.COLOR_RGB2GRAY)
-                    gray = cv2.resize(gray, (200, 200))
-                    
-                    # Use HOG-like features or just flatten
-                    features = gray.flatten().reshape(1, -1)
-                    
-                    prediction = clf.predict(features)[0]
-                    probs = clf.predict_proba(features)[0]
-                    confidence = max(probs) * 100
-                    
-                    # Update counters
+                # Add to buffers for stability
+                predictions_buffer.append(prediction)
+                confidence_buffer.append(confidence)
+                
+                if len(predictions_buffer) > 3:
+                    predictions_buffer.pop(0)
+                    confidence_buffer.pop(0)
+                
+                last_classified_time = current_time
+            
+            # Get stable prediction
+            if predictions_buffer:
+                final_pred = max(set(predictions_buffer), key=predictions_buffer.count)
+                final_conf = sum(confidence_buffer) / len(confidence_buffer)
+                
+                # Set color and label
+                if final_pred == 0:
+                    label = f"GOOD ({final_conf:.1f}%)"
+                    color = (0, 255, 0)
+                else:
+                    label = f"{label_map[final_pred]} ({final_conf:.1f}%)"
+                    color = (0, 0, 255)
+                
+                # Draw classification on bounding box
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
+                cv2.putText(frame, label, (x1, y1 - 10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                
+                # Counting with cooldown
+                if last_counted_bottle != bottle_id:
                     total_count += 1
-                    if prediction == 0:
+                    if final_pred == 0:
                         good_count += 1
-                        label = f"GOOD ({confidence:.1f}%)"
-                        color = (0, 255, 0)
                     else:
                         defective_count += 1
-                        label = f"DEFECTIVE ({confidence:.1f}%)"
-                        color = (0, 0, 255)
-                    
-                    last_detection_time[bottle_id] = current_time
-                    
-                    # Draw classification result
-                    cv2.putText(display_frame, label, (x1, y1 - 10),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-            
-            # Draw bounding box
-            cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(display_frame, f"Conf: {conf:.2f}", (x1, y2 + 20),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
-        
-        # Display statistics
-        fps = update_fps()
-        cv2.putText(display_frame, f"FPS: {fps:.1f}", (10, 30),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-        cv2.putText(display_frame, f"Total: {total_count}", (10, 60),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        cv2.putText(display_frame, f"Good: {good_count}", (10, 90),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-        cv2.putText(display_frame, f"Defective: {defective_count}", (10, 120),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-        
-        # Show processing time
-        process_time = (time.time() - current_time) * 1000
-        cv2.putText(display_frame, f"Process: {process_time:.0f}ms", (10, 150),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+                    last_counted_bottle = bottle_id
+    else:
+        # No bottle detected - reset
+        current_bottle_id = None
+        detection_start_time = None
+        predictions_buffer = []
+        confidence_buffer = []
+        cv2.putText(frame, "NO BOTTLE", (w//2 - 60, 80),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
     
+    # ======================
+    # UI Display
+    # ======================
+    
+    # Title: MKY Automation (top center)
+    cv2.putText(frame, "MKY AUTOMATION", (w//2 - 100, 40),
+               cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+    
+    # Counters at bottom right
+    cv2.putText(frame, f"TOTAL: {total_count}", (w - 150, h - 60),
+               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    cv2.putText(frame, f"GOOD: {good_count}", (w - 150, h - 35),
+               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    cv2.putText(frame, f"DEFECTIVE: {defective_count}", (w - 150, h - 10),
+               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+    
+    # Center marker (crosshair)
+    cv2.line(frame, (center_x - 15, center_y), (center_x + 15, center_y), (255, 255, 0), 1)
+    cv2.line(frame, (center_x, center_y - 15), (center_x, center_y + 15), (255, 255, 0), 1)
+    cv2.circle(frame, (center_x, center_y), 5, (255, 255, 0), -1)
+    
+    # ======================
     # Show frame
-    cv2.imshow("Bottle Inspection System", display_frame)
+    # ======================
+    cv2.imshow("MKY Automation - Bottle Inspection", frame)
     
+    # ======================
     # Keyboard controls
+    # ======================
     key = cv2.waitKey(1) & 0xFF
     if key == ord('q'):
         break
@@ -224,19 +280,19 @@ while True:
         good_count = 0
         defective_count = 0
         total_count = 0
-        last_detection_time.clear()
-        print("Counters reset")
-    elif key == ord('+') and process_every_n_frames > 1:
-        process_every_n_frames -= 1
-        print(f"Processing every {process_every_n_frames} frames")
-    elif key == ord('-'):
-        process_every_n_frames += 1
-        print(f"Processing every {process_every_n_frames} frames")
+        last_counted_bottle = None
+        print("Counters reset!")
 
+# ======================
 # Cleanup
+# ======================
 cv2.destroyAllWindows()
 picam2.close()
-print(f"\nFinal Statistics:")
-print(f"Total bottles: {total_count}")
-print(f"Good: {good_count}")
-print(f"Defective: {defective_count}")
+
+print("\n" + "=" * 50)
+print("MKY AUTOMATION - FINAL REPORT")
+print("=" * 50)
+print(f"Total Bottles: {total_count}")
+print(f"Good Bottles: {good_count}")
+print(f"Defective Bottles: {defective_count}")
+print("=" * 50)
