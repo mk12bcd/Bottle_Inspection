@@ -14,9 +14,14 @@ input_name = session.get_inputs()[0].name
 
 def preprocess(frame):
     img = cv2.resize(frame, (640, 640))
-    img = img / 255.0
-    img = img.astype(np.float32)
+    img = img.astype(np.float32) / 255.0
+
+    # Convert HWC → CHW
     img = np.transpose(img, (2, 0, 1))
+
+    # Add batch dimension
+    img = np.expand_dims(img, axis=0)
+
     return img
 
 def detect(frame):
