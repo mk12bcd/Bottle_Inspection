@@ -4,7 +4,6 @@ import onnxruntime as ort
 from picamera2 import Picamera2
 import joblib
 import time
-from collections import deque
 
 # ======================
 # Load ONNX model (320x320)
@@ -22,6 +21,12 @@ label_map = {
     1: "DEFECTIVE - Missing Cap",
     2: "DEFECTIVE - No Label"
 }
+
+# ======================
+# COCO class names (for filtering)
+# ======================
+# Class 39 is "bottle" in COCO dataset
+BOTTLE_CLASS_ID = 39
 
 # ======================
 # Camera setup
@@ -50,66 +55,76 @@ confidence_buffer = []
 detection_start_time = None
 current_bottle_id = None
 last_classified_time = 0
-CLASSIFICATION_DELAY = 0.7  # 0.7 seconds
+CLASSIFICATION_DELAY = 0.7
 
-# Cooldown to prevent double counting
 last_counted_bottle = None
-COUNTING_COOLDOWN = 1.5  # seconds
 
 # ======================
 # Preprocess for ONNX
 # ======================
 def preprocess(frame):
     h, w = frame.shape[:2]
-    scale = 320 / max(h, w)
-    new_w = int(w * scale)
-    new_h = int(h * scale)
     
-    resized = cv2.resize(frame, (new_w, new_h))
-    
-    # Create square canvas (320x320)
-    canvas = np.full((320, 320, 3), 114, dtype=np.uint8)
-    x_offset = (320 - new_w) // 2
-    y_offset = (320 - new_h) // 2
-    canvas[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = resized
+    # Resize directly to 320x320 (no padding, simpler)
+    img = cv2.resize(frame, (320, 320))
     
     # Normalize and convert
-    img = canvas.astype(np.float32) / 255.0
+    img = img.astype(np.float32) / 255.0
     img = np.transpose(img, (2, 0, 1))
     img = np.expand_dims(img, axis=0)
     
-    return img, (x_offset, y_offset, scale)
+    return img, (w, h)  # Return original dimensions for scaling
 
 # ======================
-# Detection with ONNX
+# Detection with ONNX (filter for bottle class)
 # ======================
 def detect(frame):
-    img, (x_offset, y_offset, scale) = preprocess(frame)
+    img, (orig_w, orig_h) = preprocess(frame)
     outputs = session.run(None, {input_name: img})
     
+    # YOLO output format: [batch, num_detections, 85]
+    # 85 = [x1, y1, x2, y2, objectness, class_probs...]
     preds = outputs[0][0]
+    
     boxes = []
     
     for pred in preds:
+        # Get confidence
         conf = pred[4]
+        
         if conf > 0.5:
-            x1, y1, x2, y2 = pred[:4]
+            # Get class ID (argmax of class probabilities)
+            class_probs = pred[5:]
+            class_id = np.argmax(class_probs)
+            class_conf = class_probs[class_id]
             
-            # Remove padding offset
-            x1 = (x1 - x_offset) / scale
-            y1 = (y1 - y_offset) / scale
-            x2 = (x2 - x_offset) / scale
-            y2 = (y2 - y_offset) / scale
+            # Combined confidence
+            total_conf = conf * class_conf
             
-            # Clip to frame boundaries
-            x1 = max(0, int(x1))
-            y1 = max(0, int(y1))
-            x2 = min(frame.shape[1], int(x2))
-            y2 = min(frame.shape[0], int(y2))
-            
-            # Filter out tiny boxes
-            if (x2 - x1) > 20 and (y2 - y1) > 20:
-                boxes.append((x1, y1, x2, y2, conf))
+            # Only detect bottles (class 39)
+            if class_id == BOTTLE_CLASS_ID and total_conf > 0.4:
+                # Get coordinates (these are in 320x320 space)
+                x1 = pred[0]
+                y1 = pred[1]
+                x2 = pred[2]
+                y2 = pred[3]
+                
+                # Scale to original frame size
+                x1 = int(x1 * orig_w / 320)
+                y1 = int(y1 * orig_h / 320)
+                x2 = int(x2 * orig_w / 320)
+                y2 = int(y2 * orig_h / 320)
+                
+                # Ensure coordinates are within frame
+                x1 = max(0, min(x1, orig_w))
+                y1 = max(0, min(y1, orig_h))
+                x2 = max(0, min(x2, orig_w))
+                y2 = max(0, min(y2, orig_h))
+                
+                # Filter out tiny boxes
+                if (x2 - x1) > 30 and (y2 - y1) > 30:
+                    boxes.append((x1, y1, x2, y2, total_conf))
+                    print(f"Bottle detected at: ({x1},{y1}) to ({x2},{y2}) with confidence: {total_conf:.2f}")
     
     return boxes
 
@@ -136,7 +151,7 @@ while True:
     # Find bottle closest to center
     # ======================
     center_x = w // 2
-    center_y = h // 2  # FIXED: Defined center_y here
+    center_y = h // 2
     best_box = None
     min_distance = float("inf")
     
@@ -166,10 +181,8 @@ while True:
     if best_box and bottle_id:
         x1, y1, x2, y2, conf = best_box
         
-        # Draw bounding box (always show)
+        # Draw bounding box (yellow while detecting)
         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
-        cv2.putText(frame, f"BOTTLE", (x1, y2 + 20),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
         
         # New bottle detected
         if current_bottle_id != bottle_id:
@@ -179,7 +192,7 @@ while True:
             predictions_buffer = []
             confidence_buffer = []
         
-        # Show "DETECTING..." during the 0.7 second delay
+        # Show "ANALYZING..." during the 0.7 second delay
         if detection_start_time and (current_time - detection_start_time) < CLASSIFICATION_DELAY:
             remaining = int(CLASSIFICATION_DELAY - (current_time - detection_start_time))
             cv2.putText(frame, f"ANALYZING... ({remaining}s)", (x1, y1 - 30),
