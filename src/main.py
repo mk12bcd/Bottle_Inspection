@@ -39,10 +39,14 @@ good_count = 0
 defective_count = 0
 total_count = 0
 
+# Distance threshold to prevent double-counting
+DIST_THRESHOLD = 50  # pixels
+last_counted_box = None
+
 # ======================
 # Detection with OpenCV DNN
 # ======================
-def detect(frame):
+def detect(frame, conf_threshold=0.4):
     h, w = frame.shape[:2]
     
     # Create blob
@@ -52,35 +56,43 @@ def detect(frame):
     net.setInput(blob)
     outputs = net.forward()
     
-    # Output shape: (1, 84, 8400) or (1, 8400, 84)
-    outputs = outputs[0]  # Remove batch dimension
-    
-    # Transpose if needed
-    if outputs.shape[0] == 84:
-        outputs = outputs.transpose(1, 0)
+    # YOLOv8 ONNX output shape: (1, N, 85)
+    outputs = outputs[0]  # remove batch dim
     
     boxes = []
     for i in range(outputs.shape[0]):
         obj_conf = outputs[i][4]
+        if obj_conf < conf_threshold:
+            continue
         
-        if obj_conf > 0.4:
-            class_scores = outputs[i][5:]
-            class_id = np.argmax(class_scores)
-            class_conf = class_scores[class_id]
-            
-            if class_id == 39 and class_conf > 0.4:
-                x1 = int(outputs[i][0] * w / 320)
-                y1 = int(outputs[i][1] * h / 320)
-                x2 = int(outputs[i][2] * w / 320)
-                y2 = int(outputs[i][3] * h / 320)
-                
-                x1 = max(0, min(x1, w))
-                y1 = max(0, min(y1, h))
-                x2 = max(0, min(x2, w))
-                y2 = max(0, min(y2, h))
-                
-                if (x2 - x1) > 30 and (y2 - y1) > 30:
-                    boxes.append((x1, y1, x2, y2, obj_conf))
+        class_scores = outputs[i][5:]
+        class_id = int(np.argmax(class_scores))
+        class_conf = class_scores[class_id]
+        
+        # Only detect bottles (COCO class 39)
+        if class_id != 39 or class_conf < conf_threshold:
+            continue
+        
+        # YOLOv8 outputs (x_center, y_center, width, height)
+        x_center = outputs[i][0] * w / 320
+        y_center = outputs[i][1] * h / 320
+        bw = outputs[i][2] * w / 320
+        bh = outputs[i][3] * h / 320
+        
+        x1 = int(x_center - bw / 2)
+        y1 = int(y_center - bh / 2)
+        x2 = int(x_center + bw / 2)
+        y2 = int(y_center + bh / 2)
+        
+        # Clamp coordinates
+        x1 = max(0, min(x1, w-1))
+        y1 = max(0, min(y1, h-1))
+        x2 = max(0, min(x2, w-1))
+        y2 = max(0, min(y2, h-1))
+        
+        # Ignore very small boxes
+        if (x2 - x1) > 30 and (y2 - y1) > 30:
+            boxes.append((x1, y1, x2, y2, obj_conf))
     
     return boxes
 
@@ -97,7 +109,6 @@ print("=" * 50)
 current_bottle_id = None
 detection_start_time = None
 predictions_buffer = []
-last_counted_bottle = None
 CLASSIFICATION_DELAY = 0.7
 
 while True:
@@ -175,13 +186,23 @@ while True:
                     cv2.putText(frame, label, (x1, y1 - 10),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
                     
-                    if last_counted_bottle != bottle_id:
+                    # Improved counting with distance check
+                    box_center = ((x1 + x2) // 2, (y1 + y2) // 2)
+                    count_bottle = True
+                    if last_counted_box is not None:
+                        last_center = ((last_counted_box[0] + last_counted_box[2]) // 2,
+                                       (last_counted_box[1] + last_counted_box[3]) // 2)
+                        distance = ((box_center[0] - last_center[0])**2 + (box_center[1] - last_center[1])**2)**0.5
+                        if distance < DIST_THRESHOLD:
+                            count_bottle = False
+                    
+                    if count_bottle:
                         total_count += 1
                         if final_pred == 0:
                             good_count += 1
                         else:
                             defective_count += 1
-                        last_counted_bottle = bottle_id
+                        last_counted_box = (x1, y1, x2, y2)
     else:
         current_bottle_id = None
         detection_start_time = None
@@ -214,7 +235,7 @@ while True:
         good_count = 0
         defective_count = 0
         total_count = 0
-        last_counted_bottle = None
+        last_counted_box = None
         print("Counters reset!")
 
 cv2.destroyAllWindows()
