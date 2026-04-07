@@ -12,11 +12,12 @@ angle = input("Enter angle (horizontal / inclined): ").strip()
 
 for category in classes:
     # Temp folder for today
-    temp_folder = f"/home/pi/Bottle_Inspection/Images/{category}/Today"
+    base_path = os.path.expanduser("~/Bottle_Inspection/Images")
+    temp_folder = os.path.join(base_path, category, "Today")
     os.makedirs(temp_folder, exist_ok=True)
 
     # Main folder (old + new images)
-    main_folder = f"/home/pi/Bottle_Inspection/Images/{category}/Training_Sample"
+    main_folder = os.path.join(base_path, category, "Training_Sample")
     os.makedirs(main_folder, exist_ok=True)
 
     picam2 = Picamera2()
