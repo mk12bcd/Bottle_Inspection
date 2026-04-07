@@ -7,7 +7,7 @@ import time
 classes = ["Good", "No_Cap", "No_Label"]
 
 # Ask user for brand and angle ONCE
-brand = input("Enter brand (Nestle / Puvana / Elano): ").strip()
+brand = input("Enter brand (Nestle / Dasani / Aquafina): ").strip()
 angle = input("Enter angle (horizontal / inclined): ").strip()
 
 for category in classes:
