@@ -1,55 +1,33 @@
+from picamera2 import Picamera2
 import socket
-import numpy as np
 import cv2
-import torch
+import time
 
-# Load your trained model
-model = torch.hub.load('ultralytics/yolov5', 'custom', path='runs/train/exp10/weights/best.pt')
+PC_IP = "192.168.1.1"
+PORT = 5000
 
-server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server.bind(("0.0.0.0", 5000))
-server.listen(1)
+client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+client.connect((PC_IP, PORT))
 
-print("Waiting for Pi...")
+picam2 = Picamera2()
+picam2.configure(picam2.create_preview_configuration())
+picam2.start()
 
-conn, addr = server.accept()
-print("Connected:", addr)
-
-def recvall(conn, size):
-    data = b""
-    while len(data) < size:
-        packet = conn.recv(size - len(data))
-        if not packet:
-            return None
-        data += packet
-    return data
+print("Streaming started...")
 
 while True:
-    try:
-        size = int.from_bytes(conn.recv(4), 'big')
-        img_data = recvall(conn, size)
+    frame = picam2.capture_array()
 
-        img = np.frombuffer(img_data, dtype=np.uint8)
-        frame = cv2.imdecode(img, cv2.IMREAD_COLOR)
+    # compress frame
+    _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+    data = buffer.tobytes()
 
-        # 🔥 RUN YOLO
-        results = model(frame)
+    # send size then data
+    client.send(len(data).to_bytes(4, 'big'))
+    client.sendall(data)
 
-        # get prediction text
-        labels = results.pandas().xyxy[0]['name'].tolist()
+    # receive result from PC
+    result = client.recv(1024).decode()
+    print("PC:", result)
 
-        if len(labels) == 0:
-            msg = "no_object"
-        else:
-            msg = labels[0]
-
-        print("Detected:", msg)
-
-        conn.send(msg.encode())
-
-    except Exception as e:
-        print("Error:", e)
-        break
-
-conn.close()
-server.close()
+    time.sleep(0.1)
