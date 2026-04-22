@@ -2,36 +2,39 @@ from picamera2 import Picamera2
 import socket
 import cv2
 import RPi.GPIO as GPIO
-import time
-import sys
 import signal
+import sys
 
-# ---------------- RELAY SETUP ----------------
+# ================= RELAY =================
 RELAY_PIN = 18  # GPIO18 (Pin 12)
-
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(RELAY_PIN, GPIO.OUT)
 GPIO.output(RELAY_PIN, 0)
 
-# ---------------- CAMERA ----------------
+# ================= CAMERA =================
 picam2 = Picamera2()
 picam2.configure(picam2.create_preview_configuration(main={"size": (640, 480)}))
 picam2.start()
 
-# ---------------- SOCKET ----------------
+# ================= SOCKET =================
 s = socket.socket()
-s.connect(("192.168.100.55", 5000))  # <-- your PC IP
+s.connect(("192.168.100.55", 5000))  # PC IP
 s.settimeout(1.0)
 
 print("[PI] Connected to PC")
 
-# ---------------- STATE ----------------
+# ================= STATE =================
 latest_id = "-"
 latest_class = "waiting"
+
+good_count = 0
+no_cap_count = 0
+no_label_count = 0
+
 running = True
 
 
-# ---------------- SAFE EXIT ----------------
+# ================= SAFE EXIT =================
 def stop(sig, frame):
     global running
     print("\n[PI] Stopping safely...")
@@ -42,20 +45,19 @@ signal.signal(signal.SIGINT, stop)
 signal.signal(signal.SIGTERM, stop)
 
 
-# ---------------- SEND FRAME ----------------
+# ================= SEND FRAME =================
 def send_frame():
     frame = picam2.capture_array()
-
     _, buffer = cv2.imencode(".jpg", frame)
-    data = buffer.tobytes()
 
+    data = buffer.tobytes()
     size = str(len(data)).ljust(16).encode()
 
     s.sendall(size)
     s.sendall(data)
 
 
-# ---------------- MAIN LOOP ----------------
+# ================= LOOP =================
 while running:
 
     # -------- RECEIVE COMMAND --------
@@ -82,33 +84,70 @@ while running:
 
         print(f"[PI] Bottle {latest_id} → {latest_class}")
 
-        # -------- RELAY LOGIC --------
-        if latest_class in ["no_cap", "no_label"]:
-            GPIO.output(RELAY_PIN, 1)   # REJECT
-        else:
-            GPIO.output(RELAY_PIN, 0)   # ACCEPT
+        # -------- COUNTERS --------
+        if latest_class == "good":
+            good_count += 1
+            GPIO.output(RELAY_PIN, 0)
 
-    # -------- DISPLAY UI --------
+        elif latest_class == "no_cap":
+            no_cap_count += 1
+            GPIO.output(RELAY_PIN, 1)
+
+        elif latest_class == "no_label":
+            no_label_count += 1
+            GPIO.output(RELAY_PIN, 1)
+
+    # ================= UI =================
     frame = picam2.capture_array()
     h, w, _ = frame.shape
 
-    # TITLE
+    # TOP TITLE
     cv2.putText(frame,
                 "MYK AUTOMATION",
-                (w//2 - 150, 40),
+                (w//2 - 180, 40),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                1,
+                1.2,
                 (0, 255, 255),
+                3)
+
+    # BOTTOM LEFT COUNTERS
+    cv2.putText(frame,
+                f"Good: {good_count}",
+                (20, h - 90),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 255, 0),
                 2)
 
-    # STATUS (BOTTOM RIGHT)
+    cv2.putText(frame,
+                f"No Cap: {no_cap_count}",
+                (20, h - 60),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 0, 255),
+                2)
+
+    cv2.putText(frame,
+                f"No Label: {no_label_count}",
+                (20, h - 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 165, 255),
+                2)
+
+    # BOTTOM RIGHT STATUS
     status = f"ID {latest_id} | {latest_class}"
 
     color = (0, 255, 0) if latest_class == "good" else (0, 0, 255)
 
+    (tw, th), _ = cv2.getTextSize(status,
+                                  cv2.FONT_HERSHEY_SIMPLEX,
+                                  0.8,
+                                  2)
+
     cv2.putText(frame,
                 status,
-                (w - 300, h - 20),
+                (w - tw - 20, h - 20),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.8,
                 color,
@@ -116,16 +155,16 @@ while running:
 
     cv2.imshow("Bottle Inspection", frame)
 
-    # -------- EXIT HANDLING --------
+    # EXIT CONTROL
     key = cv2.waitKey(1) & 0xFF
 
-    if key == 27:  # ESC
+    if key == 27:
         running = False
 
     if cv2.getWindowProperty("Bottle Inspection", cv2.WND_PROP_VISIBLE) < 1:
         running = False
 
-# ---------------- CLEAN EXIT ----------------
+# ================= CLEANUP =================
 print("[PI] Cleaning up...")
 
 GPIO.output(RELAY_PIN, 0)
