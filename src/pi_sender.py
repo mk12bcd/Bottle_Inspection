@@ -7,118 +7,78 @@ picam2.configure(picam2.create_preview_configuration(main={"size": (640, 480)}))
 picam2.start()
 
 s = socket.socket()
-s.connect(("192.168.1.2", 5000))
+s.connect(("192.168.100.55", 5000))
 
 print("[PI] Connected")
 
-# ---------------- STATE ----------------
-latest_text = "Waiting"
+good = 0
+no_cap = 0
+no_label = 0
+
 latest_id = "-"
+latest_result = "Waiting"
 
-good_count = 0
-no_cap_count = 0
-no_label_count = 0
 
-last_received = ""  # prevents double counting
+def send_frame(frame):
+    _, buffer = cv2.imencode(".jpg", frame)
+    data = buffer.tobytes()
+
+    size = str(len(data)).ljust(16).encode()
+    s.sendall(size)
+    s.sendall(data)
+
 
 while True:
 
-    frame = picam2.capture_array()
-
-    # ---------------- RECEIVE RESULT ----------------
-    s.setblocking(False)
     try:
-        data = s.recv(1024).decode()
+        cmd = s.recv(1024).decode().strip()
 
-        if "ID" in data and data != last_received:
-            last_received = data
-
-            parts = data.split("|")
-            latest_id = parts[0].split(":")[1]
-            latest_text = parts[1].split(":")[1]
-
-            # update counters
-            if latest_text == "good":
-                good_count += 1
-            elif latest_text == "no_cap":
-                no_cap_count += 1
-            elif latest_text == "no_label":
-                no_label_count += 1
-
-    except:
-        pass
-
-    s.setblocking(True)
-
-    display = frame.copy()
-
-    h, w, _ = display.shape
-
-    # ---------------- TITLE ----------------
-    cv2.putText(display, "MYK AUTOMATION",
-                (int(w/2) - 150, 40),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1.2, (0, 255, 255), 3)
-
-    # ---------------- COUNTS (BOTTOM LEFT) ----------------
-    cv2.putText(display, f"Good: {good_count}", (20, h - 80),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-
-    cv2.putText(display, f"No Cap: {no_cap_count}", (20, h - 50),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-
-    cv2.putText(display, f"No Label: {no_label_count}", (20, h - 20),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 165, 255), 2)
-
-    # ---------------- RESULT COLOR ----------------
-    if latest_text == "good":
-        color = (0, 255, 0)
-        result_text = "GOOD"
-    elif latest_text == "no_cap":
-        color = (0, 0, 255)
-        result_text = "NO CAP"
-    elif latest_text == "no_label":
-        color = (0, 165, 255)
-        result_text = "NO LABEL"
-    else:
-        color = (200, 200, 200)
-        result_text = "WAITING"
-
-    # ---------------- BOTTOM RIGHT (BIG RESULT) ----------------
-    text = f"ID {latest_id} | {result_text}"
-
-    (tw, th), _ = cv2.getTextSize(text,
-                                 cv2.FONT_HERSHEY_SIMPLEX,
-                                 1, 3)
-
-    cv2.putText(display,
-                text,
-                (w - tw - 20, h - 20),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,
-                color,
-                3)
-
-    # ---------------- SHOW ----------------
-    cv2.imshow("Bottle Inspection", display)
-
-    # ---------------- CAPTURE HANDLER ----------------
-    cmd = s.recv(16).decode().strip()
-
-    if cmd == "CAPTURE":
-        for _ in range(5):
-
+        # ---------------- FRAME REQUEST ----------------
+        if cmd == "CAPTURE":
             frame = picam2.capture_array()
+            send_frame(frame)
 
-            _, buffer = cv2.imencode(".jpg", frame)
-            data = buffer.tobytes()
+        # ---------------- RESULT ----------------
+        elif cmd.startswith("ID"):
 
-            size = str(len(data)).ljust(16).encode()
+            parts = cmd.split("|")
+            latest_id = parts[0].split(":")[1]
+            latest_result = parts[1].split(":")[1]
 
-            s.sendall(size)
-            s.sendall(data)
+            if latest_result == "good":
+                good += 1
+            elif latest_result == "no_cap":
+                no_cap += 1
+            elif latest_result == "no_label":
+                no_label += 1
 
-    if cv2.waitKey(1) & 0xFF == 27:
+        # ---------------- DISPLAY ----------------
+        frame = picam2.capture_array()
+        h, w, _ = frame.shape
+
+        cv2.putText(frame, "MYK AUTOMATION", (w//2 - 180, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0,255,255), 3)
+
+        cv2.putText(frame, f"Good: {good}", (20, h-80),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
+
+        cv2.putText(frame, f"No Cap: {no_cap}", (20, h-50),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
+
+        cv2.putText(frame, f"No Label: {no_label}", (20, h-20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,165,255), 2)
+
+        cv2.putText(frame, f"ID {latest_id} | {latest_result}",
+                    (w-300, h-30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0,255,0), 2)
+
+        cv2.imshow("Bottle System", frame)
+
+        if cv2.waitKey(1) & 0xFF == 27:
+            break
+
+    except Exception as e:
+        print("[PI ERROR]", e)
         break
 
 cv2.destroyAllWindows()
