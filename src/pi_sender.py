@@ -3,16 +3,15 @@ import socket
 import cv2
 import RPi.GPIO as GPIO
 import time
+import sys
+import signal
 
-# ---------------- GPIO SETUP ----------------
-RELAY_PIN = 18
+# ---------------- RELAY SETUP ----------------
+RELAY_PIN = 18  # GPIO18 (Pin 12)
 
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(RELAY_PIN, GPIO.OUT)
-GPIO.output(RELAY_PIN, GPIO.LOW)  # default = GOOD state
-
-def set_relay(state):
-    GPIO.output(RELAY_PIN, GPIO.HIGH if state == 1 else GPIO.LOW)
+GPIO.output(RELAY_PIN, 0)
 
 # ---------------- CAMERA ----------------
 picam2 = Picamera2()
@@ -21,67 +20,119 @@ picam2.start()
 
 # ---------------- SOCKET ----------------
 s = socket.socket()
-s.connect(("192.168.100.11", 5000))
+s.connect(("192.168.100.55", 5000))  # <-- your PC IP
+s.settimeout(1.0)
 
-print("[PI] Connected")
+print("[PI] Connected to PC")
 
-latest_result = "waiting"
+# ---------------- STATE ----------------
+latest_id = "-"
+latest_class = "waiting"
+running = True
 
-good = 0
-defect = 0
 
-while True:
+# ---------------- SAFE EXIT ----------------
+def stop(sig, frame):
+    global running
+    print("\n[PI] Stopping safely...")
+    running = False
 
-    # ---------------- RECEIVE FROM PC ----------------
+
+signal.signal(signal.SIGINT, stop)
+signal.signal(signal.SIGTERM, stop)
+
+
+# ---------------- SEND FRAME ----------------
+def send_frame():
+    frame = picam2.capture_array()
+
+    _, buffer = cv2.imencode(".jpg", frame)
+    data = buffer.tobytes()
+
+    size = str(len(data)).ljust(16).encode()
+
+    s.sendall(size)
+    s.sendall(data)
+
+
+# ---------------- MAIN LOOP ----------------
+while running:
+
+    # -------- RECEIVE COMMAND --------
     try:
-        data = s.recv(1024).decode().strip()
-
-        if data.startswith("RESULT"):
-
-            result = data.split(":")[1]
-            latest_result = result
-
-            # ---------------- RELAY LOGIC ----------------
-            if result == "good":
-                set_relay(0)   # GOOD → relay OFF
-                good += 1
-
-            elif result in ["no_cap", "no_label"]:
-                set_relay(1)   # DEFECT → relay ON
-                defect += 1
-
-            else:
-                set_relay(0)   # safe fallback
-
+        cmd = s.recv(16).decode().strip()
     except:
-        pass
+        cmd = None
 
-    # ---------------- DISPLAY ----------------
+    if not running:
+        break
+
+    # -------- SEND FRAME --------
+    if cmd == "CAPTURE":
+        send_frame()
+
+    # -------- RECEIVE RESULT --------
+    elif cmd and cmd.startswith("ID:"):
+        try:
+            parts = cmd.split("|")
+            latest_id = parts[0].split(":")[1]
+            latest_class = parts[1].split(":")[1]
+        except:
+            continue
+
+        print(f"[PI] Bottle {latest_id} → {latest_class}")
+
+        # -------- RELAY LOGIC --------
+        if latest_class in ["no_cap", "no_label"]:
+            GPIO.output(RELAY_PIN, 1)   # REJECT
+        else:
+            GPIO.output(RELAY_PIN, 0)   # ACCEPT
+
+    # -------- DISPLAY UI --------
     frame = picam2.capture_array()
     h, w, _ = frame.shape
 
-    cv2.putText(frame, "MYK AUTOMATION", (w//2 - 150, 40),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0,255,255), 3)
+    # TITLE
+    cv2.putText(frame,
+                "MYK AUTOMATION",
+                (w//2 - 150, 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (0, 255, 255),
+                2)
 
-    cv2.putText(frame, f"GOOD: {good}", (20, h-60),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,0), 2)
+    # STATUS (BOTTOM RIGHT)
+    status = f"ID {latest_id} | {latest_class}"
 
-    cv2.putText(frame, f"DEFECT: {defect}", (20, h-30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2)
+    color = (0, 255, 0) if latest_class == "good" else (0, 0, 255)
 
-    state_text = "GOOD (Relay OFF)" if latest_result == "good" else "DEFECT (Relay ON)"
+    cv2.putText(frame,
+                status,
+                (w - 300, h - 20),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                color,
+                2)
 
-    cv2.putText(frame, state_text, (w-350, h-30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.9,
-                (0,255,0) if latest_result=="good" else (0,0,255), 2)
+    cv2.imshow("Bottle Inspection", frame)
 
-    cv2.imshow("Pi Control System", frame)
+    # -------- EXIT HANDLING --------
+    key = cv2.waitKey(1) & 0xFF
 
-    if cv2.waitKey(1) & 0xFF == 27:
-        break
+    if key == 27:  # ESC
+        running = False
 
-# ---------------- CLEANUP ----------------
-GPIO.output(RELAY_PIN, GPIO.LOW)
+    if cv2.getWindowProperty("Bottle Inspection", cv2.WND_PROP_VISIBLE) < 1:
+        running = False
+
+# ---------------- CLEAN EXIT ----------------
+print("[PI] Cleaning up...")
+
+GPIO.output(RELAY_PIN, 0)
 GPIO.cleanup()
+
+picam2.stop()
 s.close()
 cv2.destroyAllWindows()
+
+sys.exit(0)
