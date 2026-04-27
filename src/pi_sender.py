@@ -4,12 +4,19 @@ import cv2
 import RPi.GPIO as GPIO
 import signal
 import sys
+import time
 
 # ================= RELAY =================
 RELAY_PIN = 18  # GPIO18 (Pin 12)
+
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(RELAY_PIN, GPIO.OUT)
-GPIO.output(RELAY_PIN, 0)
+
+# ACTIVE LOW RELAY
+RELAY_ON = 0
+RELAY_OFF = 1
+
+GPIO.output(RELAY_PIN, RELAY_OFF)
 
 # ================= CAMERA =================
 picam2 = Picamera2()
@@ -17,8 +24,11 @@ picam2.configure(picam2.create_preview_configuration(main={"size": (640, 480)}))
 picam2.start()
 
 # ================= SOCKET =================
+PC_IP = "192.168.100.55"   # <-- CHANGE IF NEEDED
+PORT = 5000
+
 s = socket.socket()
-s.connect(("192.168.100.55", 5000))  # PC IP
+s.connect((PC_IP, PORT))
 s.settimeout(1.0)
 
 print("[PI] Connected to PC")
@@ -57,7 +67,7 @@ def send_frame():
     s.sendall(data)
 
 
-# ================= LOOP =================
+# ================= MAIN LOOP =================
 while running:
 
     # -------- RECEIVE COMMAND --------
@@ -84,24 +94,24 @@ while running:
 
         print(f"[PI] Bottle {latest_id} → {latest_class}")
 
-        # -------- COUNTERS --------
+        # ================= RELAY LOGIC =================
         if latest_class == "good":
             good_count += 1
-            GPIO.output(RELAY_PIN, 0)
+            GPIO.output(RELAY_PIN, RELAY_OFF)
 
         elif latest_class == "no_cap":
             no_cap_count += 1
-            GPIO.output(RELAY_PIN, 1)
+            GPIO.output(RELAY_PIN, RELAY_ON)
 
         elif latest_class == "no_label":
             no_label_count += 1
-            GPIO.output(RELAY_PIN, 1)
+            GPIO.output(RELAY_PIN, RELAY_ON)
 
-    # ================= UI =================
+    # ================= UI FRAME =================
     frame = picam2.capture_array()
     h, w, _ = frame.shape
 
-    # TOP TITLE
+    # TITLE
     cv2.putText(frame,
                 "MYK AUTOMATION",
                 (w//2 - 180, 40),
@@ -110,7 +120,7 @@ while running:
                 (0, 255, 255),
                 3)
 
-    # BOTTOM LEFT COUNTERS
+    # COUNTERS (BOTTOM LEFT)
     cv2.putText(frame,
                 f"Good: {good_count}",
                 (20, h - 90),
@@ -135,7 +145,7 @@ while running:
                 (0, 165, 255),
                 2)
 
-    # BOTTOM RIGHT STATUS
+    # STATUS (BOTTOM RIGHT)
     status = f"ID {latest_id} | {latest_class}"
 
     color = (0, 255, 0) if latest_class == "good" else (0, 0, 255)
@@ -155,7 +165,7 @@ while running:
 
     cv2.imshow("Bottle Inspection", frame)
 
-    # EXIT CONTROL
+    # EXIT CONDITIONS
     key = cv2.waitKey(1) & 0xFF
 
     if key == 27:
@@ -164,10 +174,11 @@ while running:
     if cv2.getWindowProperty("Bottle Inspection", cv2.WND_PROP_VISIBLE) < 1:
         running = False
 
+
 # ================= CLEANUP =================
 print("[PI] Cleaning up...")
 
-GPIO.output(RELAY_PIN, 0)
+GPIO.output(RELAY_PIN, RELAY_OFF)
 GPIO.cleanup()
 
 picam2.stop()
