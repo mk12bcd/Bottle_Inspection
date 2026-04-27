@@ -24,7 +24,7 @@ picam2.configure(picam2.create_preview_configuration(main={"size": (640, 480)}))
 picam2.start()
 
 # ================= SOCKET =================
-PC_IP = "192.168.100.55"   # <-- CHANGE IF NEEDED
+PC_IP = "192.168.1.7"   # <-- CHANGE IF NEEDED
 PORT = 5000
 
 s = socket.socket()
