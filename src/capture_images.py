@@ -4,8 +4,8 @@ import cv2
 import os
 import time
 
-category = "Good Bottles"
-save_path = f"Bottle_Inspection/Images/{category}/Training Sample"
+category = "No_cap"
+save_path = f"Bottle_Inspection/Images2/{category}/Training sample"
 os.makedirs(save_path,exist_ok = True)
 
 
