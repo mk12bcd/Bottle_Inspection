@@ -117,7 +117,7 @@ while True:
                 cv2.rectangle(frame, (x1,y1), (x2,y2), color, 3)
                 cv2.putText(frame, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
                 
-                # Counting
+                
                 bc = ((x1+x2)//2, (y1+y2)//2)
                 count_it = True
                 if last_counted_box:
@@ -137,7 +137,7 @@ while True:
         pred_buffer = []
         cv2.putText(frame, "NO BOTTLE", (w//2-60,80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2)
     
-    # UI
+   
     cv2.putText(frame, "MKY AUTOMATION", (20,40), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255,255,255), 2)
     cv2.putText(frame, f"TOTAL: {total_count}", (w-180, h-70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
     cv2.putText(frame, f"GOOD: {good_count}", (w-180, h-40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
