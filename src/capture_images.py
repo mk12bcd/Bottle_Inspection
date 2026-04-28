@@ -4,7 +4,7 @@ import os
 import time
 
 # ✅ ABSOLUTE PATH to your repo on Raspberry Pi
-base_path = "/home/pi/Bottle_Inspection/Final_Images/Raw_Images"
+base_path = "/home/mkyautomation/Bottle_Inspection/Final_Images/Raw_Images"
 
 # Create category folders if they don't exist
 categories = {
