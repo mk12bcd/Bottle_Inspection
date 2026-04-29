@@ -1,0 +1,14 @@
+names:
+- good
+- no_cap
+- no_label
+nc: 3
+roboflow:
+  license: CC BY 4.0
+  project: bottle_inspection-0cpal
+  url: https://universe.roboflow.com/mubaraks-workspace/bottle_inspection-0cpal/dataset/5
+  version: 5
+  workspace: mubaraks-workspace
+test: ../test/images
+train: Bottle_Inspection-5/train/images
+val: Bottle_Inspection-5/valid/images
