@@ -4,6 +4,7 @@ import cv2
 import RPi.GPIO as GPIO
 import signal
 import sys
+import select
 
 RELAY_PIN = 18
 
@@ -21,7 +22,7 @@ picam2.start()
 
 s = socket.socket()
 s.connect(("192.168.1.7", 5000))
-s.settimeout(1.0)
+s.setblocking(False)
 
 buffer = ""
 
@@ -34,11 +35,18 @@ current_class = "waiting"
 
 def read_line(sock):
     global buffer
-    while "\n" not in buffer:
-        data = sock.recv(1024).decode()
-        if not data:
-            return None
-        buffer += data
+    try:
+        while "\n" not in buffer:
+            data = sock.recv(1024).decode()
+            if not data:
+                return None
+            buffer += data
+    except:
+        return None
+
+    if "\n" not in buffer:
+        return None
+
     line, buffer = buffer.split("\n", 1)
     return line.strip()
 
@@ -47,6 +55,7 @@ def stop(sig, frame):
     GPIO.cleanup()
     picam2.stop()
     s.close()
+    cv2.destroyAllWindows()
     sys.exit(0)
 
 signal.signal(signal.SIGINT, stop)
@@ -54,36 +63,41 @@ signal.signal(signal.SIGINT, stop)
 while True:
 
     frame = picam2.capture_array()
-    _, buf = cv2.imencode(".jpg", frame)
+
+    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
+    _, buf = cv2.imencode(".jpg", frame, encode_param)
     data = buf.tobytes()
 
     size = str(len(data)).ljust(16).encode()
     s.sendall(size)
     s.sendall(data)
 
-    msg = read_line(s)
+    readable, _, _ = select.select([s], [], [], 0)
 
-    if msg and msg.startswith("ID:"):
+    if readable:
+        msg = read_line(s)
 
-        parts = msg.split("|")
-        new_id = int(parts[0].split(":")[1])
-        new_class = parts[1]
+        if msg and msg.startswith("ID:"):
 
-        if new_id != current_id:
-            current_id = new_id
-            current_class = new_class
+            parts = msg.split("|")
+            new_id = int(parts[0].split(":")[1])
+            new_class = parts[1]
 
-            if new_class == "Good":
-                good += 1
-                GPIO.output(RELAY_PIN, RELAY_OFF)
+            if new_id != current_id:
+                current_id = new_id
+                current_class = new_class
 
-            elif new_class == "No_cap":
-                no_cap += 1
-                GPIO.output(RELAY_PIN, RELAY_ON)
+                if new_class == "Good":
+                    good += 1
+                    GPIO.output(RELAY_PIN, GPIO.LOW)
 
-            elif new_class == "No_label":
-                no_label += 1
-                GPIO.output(RELAY_PIN, RELAY_ON)
+                elif new_class == "No_cap":
+                    no_cap += 1
+                    GPIO.output(RELAY_PIN, GPIO.HIGH)
+
+                elif new_class == "No_label":
+                    no_label += 1
+                    GPIO.output(RELAY_PIN, GPIO.HIGH)
 
     h, w, _ = frame.shape
 
@@ -110,7 +124,7 @@ while True:
     if cv2.waitKey(1) == 27:
         break
 
-GPIO.output(RELAY_PIN, RELAY_OFF)
+GPIO.output(RELAY_PIN, GPIO.LOW)
 GPIO.cleanup()
 picam2.stop()
 s.close()
