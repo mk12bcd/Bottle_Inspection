@@ -4,7 +4,6 @@ import cv2
 import RPi.GPIO as GPIO
 import signal
 import sys
-import time
 
 RELAY_PIN = 18
 
@@ -27,15 +26,12 @@ s = socket.socket()
 s.connect((PC_IP, PORT))
 s.settimeout(1.0)
 
-print("[PI] Connected to PC")
-
-latest_id = "-"
-latest_class = "waiting"
-
 good_count = 0
 no_cap_count = 0
 no_label_count = 0
 
+latest_id = "-"
+latest_class = "waiting"
 last_processed_id = -1
 
 running = True
@@ -62,9 +58,6 @@ while running:
     except:
         cmd = None
 
-    if not running:
-        break
-
     if cmd == "CAPTURE":
         send_frame()
 
@@ -80,8 +73,6 @@ while running:
         if latest_id != last_processed_id:
 
             last_processed_id = latest_id
-
-            print(f"[FINAL] Bottle {latest_id} → {latest_class}")
 
             if latest_class == "Good":
                 good_count += 1
@@ -99,7 +90,9 @@ while running:
     h, w, _ = frame.shape
 
     cv2.putText(frame, "MYK AUTOMATION", (20, 40),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 2)
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
+
+    cv2.rectangle(frame, (10, h-120), (320, h-10), (255, 255, 255), -1)
 
     cv2.putText(frame, f"Good: {good_count}", (20, h - 90),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
@@ -110,28 +103,24 @@ while running:
     cv2.putText(frame, f"No Label: {no_label_count}", (20, h - 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
 
-    status = f"Current Bottle: {latest_id} | {latest_class}"
+    status = f"Current: {latest_id} | {latest_class}"
 
-    cv2.putText(frame, status, (w - 300, h - 20),
+    cv2.rectangle(frame, (w-300, h-60), (w-10, h-10), (255,255,255), -1)
+
+    cv2.putText(frame, status, (w - 290, h - 25),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
 
     cv2.imshow("Bottle Inspection", frame)
 
-    key = cv2.waitKey(1) & 0xFF
-
-    if key == 27:
+    if cv2.waitKey(1) == 27:
         running = False
 
     if cv2.getWindowProperty("Bottle Inspection", cv2.WND_PROP_VISIBLE) < 1:
         running = False
 
-print("[PI] Cleaning up...")
-
 GPIO.output(RELAY_PIN, RELAY_OFF)
 GPIO.cleanup()
-
 picam2.stop()
 s.close()
 cv2.destroyAllWindows()
-
 sys.exit(0)
