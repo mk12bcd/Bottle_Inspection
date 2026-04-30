@@ -27,12 +27,16 @@ no_label = 0
 
 current_id = -1
 current_class = "waiting"
+buffer = ""
 
 def read_line(sock):
     global buffer
-    data = sock.recv(4096).decode()
-    if data:
-        buffer += data
+    try:
+        data = sock.recv(4096).decode()
+        if data:
+            buffer += data
+    except:
+        return None
 
     if "\n" in buffer:
         line, buffer = buffer.split("\n", 1)
