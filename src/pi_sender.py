@@ -4,6 +4,7 @@ import cv2
 import RPi.GPIO as GPIO
 import signal
 import sys
+import time
 
 RELAY_PIN = 18
 
@@ -12,6 +13,7 @@ GPIO.setup(RELAY_PIN, GPIO.OUT)
 
 RELAY_ON = 0
 RELAY_OFF = 1
+
 GPIO.output(RELAY_PIN, RELAY_OFF)
 
 picam2 = Picamera2()
@@ -25,12 +27,16 @@ s = socket.socket()
 s.connect((PC_IP, PORT))
 s.settimeout(1.0)
 
+print("[PI] Connected to PC")
+
+latest_id = "-"
+latest_class = "waiting"
+
 good_count = 0
 no_cap_count = 0
 no_label_count = 0
 
-latest_id = "-"
-latest_class = "waiting"
+last_processed_id = -1
 
 running = True
 
@@ -56,38 +62,45 @@ while running:
     except:
         cmd = None
 
+    if not running:
+        break
+
     if cmd == "CAPTURE":
         send_frame()
 
     elif cmd and cmd.startswith("ID:"):
+
         try:
             parts = cmd.split("|")
-            latest_id = parts[0].split(":")[1]
+            latest_id = int(parts[0].split(":")[1])
             latest_class = parts[1]
-            good = int(parts[2].split(":")[1])
-            defects = int(parts[3].split(":")[1])
         except:
             continue
 
-        if latest_class == "good":
-            good_count += 1
-            GPIO.output(RELAY_PIN, RELAY_OFF)
-        elif latest_class == "no_cap":
-            no_cap_count += 1
-            GPIO.output(RELAY_PIN, RELAY_ON)
-        elif latest_class == "no_label":
-            no_label_count += 1
-            GPIO.output(RELAY_PIN, RELAY_ON)
+        if latest_id != last_processed_id:
+
+            last_processed_id = latest_id
+
+            print(f"[FINAL] Bottle {latest_id} → {latest_class}")
+
+            if latest_class == "Good":
+                good_count += 1
+                GPIO.output(RELAY_PIN, RELAY_OFF)
+
+            elif latest_class == "No_cap":
+                no_cap_count += 1
+                GPIO.output(RELAY_PIN, RELAY_ON)
+
+            elif latest_class == "No_label":
+                no_label_count += 1
+                GPIO.output(RELAY_PIN, RELAY_ON)
 
     frame = picam2.capture_array()
     h, w, _ = frame.shape
 
-    # TITLE (UNCHANGED STYLE)
-    cv2.rectangle(frame, (0, 0), (w, 50), (0, 0, 0), -1)
-    cv2.putText(frame, "MYK AUTOMATION", (20, 35),
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+    cv2.putText(frame, "MYK AUTOMATION", (20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 2)
 
-    # COUNTERS (BOTTOM LEFT)
     cv2.putText(frame, f"Good: {good_count}", (20, h - 90),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
@@ -95,39 +108,30 @@ while running:
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
     cv2.putText(frame, f"No Label: {no_label_count}", (20, h - 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
 
-    # CURRENT BOTTLE (BOTTOM RIGHT, BLACK TEXT WITH WHITE BOX)
-    status = f"Bottle {latest_id}: {latest_class}"
+    status = f"Current Bottle: {latest_id} | {latest_class}"
 
-    (tw, th), _ = cv2.getTextSize(status, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
-
-    x = w - tw - 20
-    y = h - 20
-
-    cv2.rectangle(frame,
-                  (x - 10, y - th - 10),
-                  (x + tw + 10, y + 10),
-                  (255, 255, 255), -1)
-
-    cv2.putText(frame, status,
-                (x, y),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 0, 0),
-                2)
+    cv2.putText(frame, status, (w - 300, h - 20),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
 
     cv2.imshow("Bottle Inspection", frame)
 
-    if cv2.waitKey(1) == 27:
+    key = cv2.waitKey(1) & 0xFF
+
+    if key == 27:
         running = False
 
     if cv2.getWindowProperty("Bottle Inspection", cv2.WND_PROP_VISIBLE) < 1:
         running = False
 
+print("[PI] Cleaning up...")
+
 GPIO.output(RELAY_PIN, RELAY_OFF)
 GPIO.cleanup()
+
 picam2.stop()
 s.close()
 cv2.destroyAllWindows()
+
 sys.exit(0)
