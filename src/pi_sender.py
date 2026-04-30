@@ -53,18 +53,13 @@ signal.signal(signal.SIGINT, stop)
 
 while True:
 
-    try:
-        cmd = s.recv(16).decode().strip()
-    except:
-        cmd = None
+    frame = picam2.capture_array()
+    _, buf = cv2.imencode(".jpg", frame)
+    data = buf.tobytes()
 
-    if cmd == "CAPTURE":
-        frame = picam2.capture_array()
-        _, buf = cv2.imencode(".jpg", frame)
-        data = buf.tobytes()
-        size = str(len(data)).ljust(16).encode()
-        s.sendall(size)
-        s.sendall(data)
+    size = str(len(data)).ljust(16).encode()
+    s.sendall(size)
+    s.sendall(data)
 
     msg = read_line(s)
 
@@ -90,7 +85,6 @@ while True:
                 no_label += 1
                 GPIO.output(RELAY_PIN, RELAY_ON)
 
-    frame = picam2.capture_array()
     h, w, _ = frame.shape
 
     cv2.putText(frame, "MYK AUTOMATION", (20, 40),
