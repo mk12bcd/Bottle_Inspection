@@ -55,12 +55,9 @@ while True:
         s.sendall(data)
 
     elif cmd and cmd.startswith("ID:"):
-        try:
-            parts = cmd.split("|")
-            new_id = int(parts[0].split(":")[1])
-            new_class = parts[1]
-        except:
-            continue
+        parts = cmd.split("|")
+        new_id = int(parts[0].split(":")[1])
+        new_class = parts[1]
 
         if new_id != current_id:
             current_id = new_id
@@ -82,20 +79,22 @@ while True:
     h, w, _ = frame.shape
 
     cv2.putText(frame, "MYK AUTOMATION", (20, 40),
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,0), 2)
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
 
-    cv2.putText(frame, f"Good: {good}", (20, h-90),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
-
-    cv2.putText(frame, f"No Cap: {no_cap}", (20, h-60),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
-
-    cv2.putText(frame, f"No Label: {no_label}", (20, h-30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,165,255), 2)
+    cv2.rectangle(frame, (w-320, h-70), (w-10, h-10), (255, 255, 255), -1)
 
     cv2.putText(frame, f"Current: {current_id} | {current_class}",
-                (w-320, h-30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,0), 2)
+                (w-310, h-40),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+
+    cv2.putText(frame, f"Good: {good}", (20, h-90),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+    cv2.putText(frame, f"No Cap: {no_cap}", (20, h-60),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+    cv2.putText(frame, f"No Label: {no_label}", (20, h-30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
 
     cv2.imshow("Bottle Inspection", frame)
 
