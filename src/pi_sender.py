@@ -18,7 +18,7 @@ picam2 = Picamera2()
 picam2.configure(picam2.create_preview_configuration(main={"size": (640, 480)}))
 picam2.start()
 
-PC_IP = "172.18.80.1"
+PC_IP = "192.168.1.7"
 PORT = 5000
 
 s = socket.socket()
