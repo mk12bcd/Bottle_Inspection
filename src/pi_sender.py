@@ -23,12 +23,24 @@ s = socket.socket()
 s.connect(("192.168.1.7", 5000))
 s.settimeout(1.0)
 
+buffer = ""
+
 good = 0
 no_cap = 0
 no_label = 0
 
 current_id = -1
 current_class = "waiting"
+
+def read_line(sock):
+    global buffer
+    while "\n" not in buffer:
+        data = sock.recv(1024).decode()
+        if not data:
+            return None
+        buffer += data
+    line, buffer = buffer.split("\n", 1)
+    return line.strip()
 
 def stop(sig, frame):
     GPIO.output(RELAY_PIN, RELAY_OFF)
@@ -48,14 +60,17 @@ while True:
 
     if cmd == "CAPTURE":
         frame = picam2.capture_array()
-        _, buffer = cv2.imencode(".jpg", frame)
-        data = buffer.tobytes()
+        _, buf = cv2.imencode(".jpg", frame)
+        data = buf.tobytes()
         size = str(len(data)).ljust(16).encode()
         s.sendall(size)
         s.sendall(data)
 
-    elif cmd and cmd.startswith("ID:"):
-        parts = cmd.split("|")
+    msg = read_line(s)
+
+    if msg and msg.startswith("ID:"):
+
+        parts = msg.split("|")
         new_id = int(parts[0].split(":")[1])
         new_class = parts[1]
 
