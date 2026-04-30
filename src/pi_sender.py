@@ -101,7 +101,7 @@ while running:
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
     cv2.putText(frame, f"No Label: {no_label_count}", (20, h - 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 254), 2)
 
     status = f"Current: {latest_id} | {latest_class}"
 
