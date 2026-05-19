@@ -13,7 +13,7 @@ from deep_sort_realtime.deepsort_tracker import DeepSort
 # Detection model - fast, general bottle detection (COCO pretrained)
 detection_model = YOLO("yolov8s.pt")
 
-# Classification model - identifies Good/No_cap/No_label on cropped regions
+# Classification model - identifies Good/No_cap/No_label on full frames
 classification_model = YOLO(r"C:\Users\mubar\OneDrive - Universities of Canada\Documents\Bottle_Inspection\models\best_fold5.pt")
 
 tracker = DeepSort(
@@ -35,15 +35,15 @@ print(f"Pi connected from {addr}")
 
 HEADER = 4
 
-COUNT_STABLE_FRAMES = 1  # YOLOv8s detection is reliable; reduced from 2 for faster response
+COUNT_STABLE_FRAMES = 1
 MAX_EXPECTED_BOTTLES = 3
 
 SINGLE_BOTTLE_PX = 80
 OVERLAP_RATIO_THRESHOLD = 1.7
 
-TRIGGER_X_FRAC = 0.70
-MIN_HISTORY_FRAMES = 8
-MIN_VOTE_FRAC = 0.60
+TRIGGER_X_FRAC = 0.75          # CHANGED: moved right for right→left belt
+MIN_HISTORY_FRAMES = 5         # CHANGED: 5 frames for stable classification
+MIN_VOTE_FRAC = 0.50           # CHANGED: lowered from 0.60
 SPATIAL_RADIUS_PX = 80
 SPATIAL_COOLDOWN_S = 3.0
 TRACK_CLEANUP_AGE = 60
@@ -58,6 +58,10 @@ track_triggered = set()
 recently_counted = []
 track_last_seen = {}
 frame_count = 0
+
+fps_start_time = time.time()
+fps_frame_count = 0
+current_fps = 0.0
 
 
 def recv_exact(sock, n):
@@ -136,54 +140,49 @@ threading.Thread(target=capture_thread, daemon=True).start()
 
 def classify_bottle_crop(frame, x1, y1, x2, y2):
     """
-    Crop a bottle region from frame and classify it using best_fold5.pt.
-    Returns: classification label (Good, No_cap, No_label) or None if classification fails.
+    Pass full frame resized to 832x832 (training size) to classification model.
+    Returns: Good, No_cap, No_label or None.
     """
     try:
-        # Ensure coordinates are within frame bounds
-        h, w = frame.shape[:2]
-        x1, y1 = max(0, int(x1)), max(0, int(y1))
-        x2, y2 = min(w, int(x2)), min(h, int(y2))
-        
-        # Crop the bottle region
-        crop = frame[y1:y2, x1:x2]
-        
-        if crop.size == 0:
-            return None
-        
-        # Classify using best_fold5.pt
-        results = classification_model(crop, conf=0.40)[0]
-        
+        # CHANGED: use full frame resized to training size, not crop
+        full_frame_resized = cv2.resize(frame, (832, 832))
+
+        results = classification_model(full_frame_resized, verbose=False, conf=0.1)[0]
+
+        # CHANGED: use boxes (detection model), not probs
         if results.boxes is None or len(results.boxes) == 0:
             return None
-        
-        # Get highest confidence classification
+
         best_idx = results.boxes.conf.argmax().item()
         class_id = int(results.boxes.cls[best_idx])
-        label = classification_model.names[class_id]
         conf = results.boxes.conf[best_idx].item()
-        
+        label = classification_model.names[class_id]
+
+        print(f"[CLASSIFY] {label} ({conf:.2f})")
+
+        if conf < 0.25:
+            return None
+
         return label
-    
+
     except Exception as e:
         print(f"[CLASSIFY ERROR] {e}")
         return None
 
 
 def analyse_detections(boxes, frame):
-    """
-    Analyze YOLOv8s detections. Extract boxes and prepare for tracking.
-    For each detection, we'll classify it later once tracking is stable.
-    """
     if boxes is None or len(boxes) == 0:
         return []
 
     detections = []
 
     for i in range(len(boxes)):
+        class_id = int(boxes.cls[i].item())
+        if class_id != 39:
+            continue
         x1, y1, x2, y2 = boxes.xyxy[i].tolist()
         conf = boxes.conf[i].item()
-        
+
         detections.append({
             'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
             'conf': conf,
@@ -207,11 +206,10 @@ try:
         # ─────────────────────────────────────────────────────────────
         # STEP 1: Fast bottle detection using YOLOv8s
         # ─────────────────────────────────────────────────────────────
-        detection_results = detection_model(frame, conf=0.50)[0]
+        detection_results = detection_model(frame, conf=0.50, classes=[39])[0]
         detection_boxes = detection_results.boxes
         detections = analyse_detections(detection_boxes, frame)
 
-        # Get raw bottle count from YOLOv8s
         raw_count = len(detections)
 
         count_frame_buffer.append(raw_count)
@@ -248,8 +246,7 @@ try:
             w = x2 - x1
             h = y2 - y1
             conf = det['conf']
-            
-            # All detections are "bottle" for tracking purposes
+
             detections_for_tracker.append(
                 ([x1, y1, w, h], conf, "bottle")
             )
@@ -266,7 +263,33 @@ try:
         trigger_px = int(w * TRIGGER_X_FRAC)
 
         # ─────────────────────────────────────────────────────────────
-        # STEP 4: Process confirmed tracks and classify
+        # STEP 4a: Find the FRONT bottle (smallest cx = furthest left)
+        # Belt moves right→left so front bottle has smallest cx
+        # ─────────────────────────────────────────────────────────────
+        closest_track_id = None
+        closest_distance_to_trigger = float('inf')
+
+        for track in tracks:
+            if not track.is_confirmed():
+                continue
+
+            track_id = track.track_id
+
+            # Skip already classified bottles
+            if track_id in sent_ids:
+                continue
+
+            ltrb = track.to_ltrb()
+            x1, y1, x2, y2 = map(int, ltrb)
+            cx = int((x1 + x2) / 2)
+
+            # CHANGED: pick smallest cx = front bottle on right→left belt
+            if cx < closest_distance_to_trigger:
+                closest_distance_to_trigger = cx
+                closest_track_id = track_id
+
+        # ─────────────────────────────────────────────────────────────
+        # STEP 4b: Process confirmed tracks
         # ─────────────────────────────────────────────────────────────
         for track in tracks:
 
@@ -282,24 +305,24 @@ try:
             cx = int((x1 + x2) / 2)
             cy = int((y1 + y2) / 2)
 
-            # Check if bottle crossed trigger line
+            # CHANGED: right→left crossing detection (cx decreasing)
             prev_cx = track_last_cx.get(track_id)
-            if prev_cx is not None and prev_cx < trigger_px <= cx:
+            if prev_cx is not None and prev_cx > trigger_px >= cx:
                 track_triggered.add(track_id)
             track_last_cx[track_id] = cx
 
             if track_id not in track_history:
                 track_history[track_id] = []
 
-            # ─────────────────────────────────────────────────────────
-            # CLASSIFY the bottle crop with best_fold5.pt
-            # ─────────────────────────────────────────────────────────
-            label = classify_bottle_crop(frame, x1, y1, x2, y2)
+            # Classify only the FRONT bottle
+            if track_id == closest_track_id:
+                label = classify_bottle_crop(frame, x1, y1, x2, y2)
 
-            if label is not None:
-                track_history[track_id].append(label)
+                if label is not None:
+                    track_history[track_id].append(label)
 
-            if len(track_history[track_id]) > 15:
+            # CHANGED: keep up to 10 history frames
+            if len(track_history[track_id]) > 10:
                 track_history[track_id].pop(0)
 
             history = track_history[track_id]
@@ -322,7 +345,7 @@ try:
             if win_count / len(history) < MIN_VOTE_FRAC:
                 continue
 
-            # Check for spatial duplicates (same bottle detected twice)
+            # Check for spatial duplicates
             now = time.time()
             recently_counted = [
                 (old_cx, old_cy, ts)
@@ -353,7 +376,7 @@ try:
                 no_label_count += 1
 
             send_msg(conn, f"ID:{track_id}|{final}")
-            print(f"Sent classification → ID:{track_id}|{final}")
+            print(f"[CLASSIFY] Sent classification → ID:{track_id}|{final}")
 
             sent_ids.add(track_id)
 
@@ -371,17 +394,13 @@ try:
             track_last_cx.pop(track_id, None)
             track_last_seen.pop(track_id, None)
 
-        # ─────────────────────────────────────────────────────────────
-        # STEP 6: Visualization
-        # ─────────────────────────────────────────────────────────────
         if detection_boxes is not None:
             for i in range(len(detection_boxes)):
+                if int(detection_boxes.cls[i].item()) != 39:
+                    continue
                 x1, y1, x2, y2 = [int(v) for v in detection_boxes.xyxy[i].tolist()]
-
-                # Draw YOLOv8s detections (gray boxes)
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (128, 128, 128), 1)
 
-        # Draw DeepSort tracks (green boxes with IDs)
         for track in tracks:
 
             if not track.is_confirmed():
@@ -391,9 +410,11 @@ try:
 
             x1, y1, x2, y2 = map(int, track.to_ltrb())
 
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            box_color = (0, 255, 255) if track_id == closest_track_id else (0, 255, 0)
+            box_thickness = 3 if track_id == closest_track_id else 2
 
-            # Display track ID and classification history
+            cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, box_thickness)
+
             history = track_history.get(track_id, [])
             if history:
                 final, _ = Counter(history).most_common(1)[0]
@@ -403,21 +424,21 @@ try:
                     (x1, y1 - 10),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.6,
-                    (0, 255, 0),
+                    box_color,
                     2,
                 )
             else:
+                status_text = f"ID:{track_id} ◄ CLASSIFYING" if track_id == closest_track_id else f"ID:{track_id}"
                 cv2.putText(
                     frame,
-                    f"ID:{track_id}",
+                    status_text,
                     (x1, y1 - 10),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.6,
-                    (0, 255, 0),
+                    box_color,
                     2,
                 )
 
-        # Draw trigger line
         cv2.line(frame, (trigger_px, 0), (trigger_px, h), (0, 255, 255), 1)
         cv2.putText(
             frame,
@@ -451,14 +472,21 @@ try:
             2,
         )
 
+        text = "MYK AUTOMATION"
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 1.2
+        thickness = 2
+        text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
+        text_x = (w - text_size[0]) // 2
+        text_y = 45
         cv2.putText(
             frame,
-            "MYK AUTOMATION",
-            (20, 40),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1,
+            text,
+            (text_x, text_y),
+            font,
+            font_scale,
             (0, 0, 0),
-            2,
+            thickness,
         )
 
         cv2.rectangle(frame, (10, h - 120), (320, h - 10), (255, 255, 255), -1)
